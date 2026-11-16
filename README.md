@@ -9,6 +9,7 @@
 Ohne Konto, ohne Telefonnummer, ohne Server, der deine Nachrichten speichert.
 
 [![Download](https://img.shields.io/badge/Download-WhatsUp_Setup-1a8cff?style=for-the-badge&logo=windows)](https://github.com/Jeremy-Jud/whatsup/releases/latest/download/WhatsUp-Setup.exe)
+[![Webseite](https://img.shields.io/badge/Webseite-Über_WhatsUp-555?style=for-the-badge&logo=googlechrome&logoColor=white)](https://jeremy-jud.github.io/whatsup/about/)
 
 [![Release](https://img.shields.io/github/v/release/Jeremy-Jud/whatsup?label=Version)](https://github.com/Jeremy-Jud/whatsup/releases/latest)
 [![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-green)](LICENSE)
@@ -38,6 +39,8 @@ Danach Namen eingeben und fertig. Du bekommst deinen eigenen **6-stelligen Code*
 > Prüfe vorher am besten die [SHA-256-Prüfsumme](#-prüfsumme-checken) der Datei.
 
 Alle Versionen findest du unter [**Releases**](https://github.com/Jeremy-Jud/whatsup/releases).
+
+Mehr über WhatsUp findest du auf der Webseite: **[jeremy-jud.github.io/whatsup/about](https://jeremy-jud.github.io/whatsup/about/)**
 
 ### 📱 iPhone & iPad
 

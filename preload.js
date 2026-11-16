@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('chatboxWindow', {
   testReply: (chatId, text) => ipcRenderer.send('test:reply', chatId, text),
   ready: () => ipcRenderer.send('app:ready'),
   onHidden: (fn) => ipcRenderer.on('win:hidden', () => fn()),
+  storageKey: () => ipcRenderer.invoke('store:key'),
 });
 
 contextBridge.exposeInMainWorld('whatsupApp', {

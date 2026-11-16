@@ -34,6 +34,9 @@
       <symbol id="i-video-off" viewBox="0 0 24 24"><path d="M15.5 13.5l5 3v-9l-5 3M10 6.5h3a2.5 2.5 0 0 1 2.5 2.5v3M15.5 16a2.5 2.5 0 0 1-2.5 1.5H5.5A2.5 2.5 0 0 1 3 15V9a2.5 2.5 0 0 1 2-2.4M3 3l18 18"/></symbol>
       <symbol id="i-flip" viewBox="0 0 24 24"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1.5-2h6l1.5 2h2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><path d="M9 12a3 3 0 0 1 5.2-2M15 13a3 3 0 0 1-5.2 2M14.5 8.3v1.9h-1.9M9.5 16.7v-1.9h1.9"/></symbol>
       <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.9l10.2-6.5a1 1 0 0 0 0-1.8L9.5 4.6A1 1 0 0 0 8 5.5z"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
       <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></symbol>
     </defs>
   </svg>
@@ -56,6 +59,7 @@
       <input id="setupName" maxlength="24" placeholder="Dein Name" autocomplete="off">
       <button id="setupBtn" class="primary">Weiter</button>
       <button id="setupLoginLink" class="ghost" type="button">Ich habe schon ein Konto</button>
+      <button id="setupRestore" class="ghost" type="button">Backup wiederherstellen</button>
     </div>
     <div class="setup hidden" id="setupLogin">
       <img src="assets/logo.png" class="logo" alt="WhatsUp-Logo">
@@ -86,6 +90,10 @@
       <button class="ic" type="submit" title="Hinzufügen"><svg><use href="#i-plus"/></svg></button>
     </form>
     <div id="addStatus" class="status"></div>
+    <div class="list-search">
+      <svg><use href="#i-search"/></svg>
+      <input id="listSearch" type="search" placeholder="Chats und Nachrichten suchen" autocomplete="off" spellcheck="false">
+    </div>
     <div class="listhead">
       <span>Chats</span>
       <button id="newGroupBtn" class="link">Neue Gruppe</button>
@@ -108,6 +116,14 @@
         <button id="videoCallBtn" class="ic" title="Videoanruf"><svg><use href="#i-video"/></svg></button>
         <button id="audioCallBtn" class="ic" title="Anruf"><svg><use href="#i-phone"/></svg></button>
       </div>
+      <button id="searchBtn" class="ic chat-search-btn" title="Im Chat suchen"><svg><use href="#i-search"/></svg></button>
+    </div>
+    <div id="chatSearchBar" class="chat-search hidden">
+      <input id="chatSearchIn" type="search" placeholder="Im Chat suchen" autocomplete="off" spellcheck="false">
+      <span id="chatSearchCount" class="muted"></span>
+      <button type="button" id="chatSearchUp" class="ic" title="Älterer Treffer"><svg><use href="#i-up"/></svg></button>
+      <button type="button" id="chatSearchDown" class="ic" title="Neuerer Treffer"><svg><use href="#i-down"/></svg></button>
+      <button type="button" id="chatSearchClose" class="ic" title="Suche schließen"><svg><use href="#i-x"/></svg></button>
     </div>
     <div id="messages" class="messages"></div>
     <div id="emojiPanel" class="emoji-panel hidden">
@@ -123,7 +139,7 @@
     </div>
     <form id="sendForm" class="composer">
       <button type="button" id="emojiBtn" class="ic" title="Emojis"><svg><use href="#i-smile"/></svg></button>
-      <button type="button" id="attachBtn" class="ic" title="Bild oder GIF"><svg><use href="#i-clip"/></svg></button>
+      <button type="button" id="attachBtn" class="ic" title="Bild, GIF oder Datei"><svg><use href="#i-clip"/></svg></button>
       <button type="button" id="videoBtn" class="ic" title="Video aufnehmen"><svg><use href="#i-video"/></svg></button>
       <button type="button" id="pollBtn" class="ic hidden" title="Umfrage erstellen"><svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V5M19 20v-6"/></svg></button>
       <input id="msgInput" placeholder="Nachricht" autocomplete="off" maxlength="4000">
@@ -138,7 +154,7 @@
         <button type="button" id="recSend" class="send" title="Sprachnachricht senden"><svg><use href="#i-send"/></svg></button>
       </div>
     </form>
-    <div id="dropHint" class="drop-hint hidden">Bild hier ablegen</div>
+    <div id="dropHint" class="drop-hint hidden">Bild oder Datei hier ablegen</div>
   </section>
 
   <!-- Einstellungen -->
@@ -168,6 +184,10 @@
           <button id="profCopy" class="ic small-ic" title="Kopieren"><svg><use href="#i-copy"/></svg></button></span>
       </div>
       <button id="profSave" class="primary full hidden">Speichern</button>
+
+      <h2>Chats</h2>
+      <label class="setting"><span>Anzeigen, wenn ich schreibe<span class="muted setting-sub">Andere sehen „schreibt…“, solange du tippst</span></span><input type="checkbox" class="switch" id="setTyping"></label>
+      <label class="setting" id="gifRow"><span>GIF-Suche im Emoji-Feld<span class="muted setting-sub">Suchbegriffe gehen an GIPHY</span></span><input type="checkbox" class="switch" id="setGif"></label>
 
       <h2>Ranglisten</h2>
       <label class="setting"><span>In Ranglisten zeigen<span class="muted setting-sub">Name, Code, Erfolge, längster Streak und Challenge-Punkte sind für alle sichtbar</span></span><input type="checkbox" class="switch" id="setLeaderboard"></label>
@@ -207,6 +227,10 @@
       <h2>Speicher</h2>
       <div class="setting"><span>Belegt</span><span class="muted" id="storageUsed">–</span></div>
       <div class="setting"><span class="muted">Chats nach Größe anzeigen und leeren</span><button id="storageManage" class="link">Verwalten</button></div>
+      <div class="setting"><span>Verlauf auf diesem Gerät</span><span class="muted" id="encStatus">–</span></div>
+
+      <h2>Backup</h2>
+      <div class="setting"><span>Alles mit Passwort sichern<span class="muted setting-sub">Profil, Freunde, Chats, Bilder und Dateien. Wiederherstellen beim Einrichten über „Backup wiederherstellen“.</span></span><button id="backupBtn" class="link">Erstellen</button></div>
 
       <div id="adminSection" class="admin-section hidden">
         <h2>🛡️ Admin</h2>
@@ -419,7 +443,8 @@
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>
-  <input type="file" id="fileInput" accept="image/*" hidden>
+  <input type="file" id="fileInput" hidden>
+  <input type="file" id="backupInput" accept=".whatsup,application/octet-stream,application/json" hidden>
   <input type="file" id="reelFileInput" accept="image/*,video/*" multiple hidden>
   <input type="file" id="avatarInput" accept="image/*" hidden>
   <input type="file" id="groupAvatarInput" accept="image/*" hidden>
@@ -449,6 +474,7 @@
   <script src="emojis.js"></script>
   <script src="achievements.js"></script>
   <script src="frames.js"></script>
+  <script src="lib.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

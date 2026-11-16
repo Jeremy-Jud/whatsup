@@ -13,7 +13,11 @@
   const MAX_MB = 25;                                              // max. Größe pro Bild/GIF
   const MAX_MEDIA = Math.ceil(MAX_MB * 1024 * 1024 * 4 / 3) + 64; // als Base64-Daten-URL
   const OLD_MAX_MEDIA = 10 * 1024 * 1024; // Grenze bis v1.10 – ältere Versionen lehnen Größeres ab
-  const PROTO = 6;                        // Protokoll-Version (3 = große Dateien bis 25 MB, 4 = Sprachnachrichten, 5 = Sticker, 6 = Videos)
+  const PROTO = 7;                        // Protokoll-Version (3 = große Dateien bis 25 MB, 4 = Sprachnachrichten, 5 = Sticker, 6 = Videos, 7 = Dateien)
+  // GIF-Suche über GIPHY: kostenlosen API-Schlüssel unter https://developers.giphy.com erstellen und hier eintragen.
+  // Leer = keine GIF-Suche (der GIF-Reiter im Emoji-Feld wird dann nicht angezeigt).
+  const GIPHY_KEY = '';
+  const LIB = window.WHATSUP_LIB;
   const STICKER_OWNER = 'V5KGWG';         // nur dieser Nutzer hat die Sticker-Funktion
   const STICKER_MAX = 1.5 * 1024 * 1024;
   const MAX_AVATAR = 300 * 1024;
@@ -36,9 +40,30 @@
     },
   };
 
-  // IndexedDB für Chatverläufe und Bilder (localStorage wäre dafür zu klein)
+  // IndexedDB für Chatverläufe und Bilder (localStorage wäre dafür zu klein).
+  // Windows-App: Chats und Bilder werden mit einem Schlüssel verschlüsselt, den Windows (DPAPI)
+  // für diesen Benutzer schützt. Ältere, unverschlüsselte Einträge werden weiter gelesen und nach und nach umgestellt.
   const db = (() => {
     let dbp;
+    const ENC_STORES = new Set(['chats', 'media']);
+    let keyP = null;
+    const encKey = () => keyP || (keyP = (async () => {
+      try {
+        const raw = window.chatboxWindow.storageKey ? await window.chatboxWindow.storageKey() : null;
+        return raw ? await crypto.subtle.importKey('raw', LIB.unb64(raw), 'AES-GCM', false, ['encrypt', 'decrypt']) : null;
+      } catch (e) { console.warn('Speicher-Schlüssel:', e); return null; }
+    })());
+    const seal = async (s, v) => {
+      if (!ENC_STORES.has(s) || v == null) return v;
+      const k = await encKey();
+      return k ? LIB.sealValue(k, v) : v;
+    };
+    const unseal = async (s, v) => {
+      if (!ENC_STORES.has(s) || !LIB.isSealed(v)) return v;
+      const k = await encKey();
+      if (!k) return null;
+      try { return await LIB.openValue(k, v); } catch (e) { console.warn('Entschlüsseln fehlgeschlagen:', e); return null; }
+    };
     const open = () => dbp || (dbp = new Promise((res, rej) => {
       const r = indexedDB.open('chatbox', 2);
       r.onupgradeneeded = () => {
@@ -66,22 +91,46 @@
         dbp = null;
         await new Promise((res) => { const r = indexedDB.deleteDatabase('chatbox'); r.onsuccess = r.onerror = r.onblocked = () => res(); });
       },
-      get: (s, k) => run(s, 'readonly', (st) => st.get(k)),
-      put: (s, k, v) => run(s, 'readwrite', (st) => st.put(v, k)),
+      get: async (s, k) => unseal(s, await run(s, 'readonly', (st) => st.get(k))),
+      raw: (s, k) => run(s, 'readonly', (st) => st.get(k)), // ohne Entschlüsseln (für die Umstellung)
+      put: async (s, k, v) => { const sv = await seal(s, v); return run(s, 'readwrite', (st) => st.put(sv, k)); },
       del: (s, k) => run(s, 'readwrite', (st) => st.delete(k)),
       all: async (s) => {
         const d = await open();
-        return new Promise((res, rej) => {
-          const out = {};
+        const out = await new Promise((res, rej) => {
+          const o = {};
           const t = d.transaction(s, 'readonly');
           const c = t.objectStore(s).openCursor();
-          c.onsuccess = () => { const cur = c.result; if (cur) { out[cur.key] = cur.value; cur.continue(); } };
-          t.oncomplete = () => res(out);
+          c.onsuccess = () => { const cur = c.result; if (cur) { o[cur.key] = cur.value; cur.continue(); } };
+          t.oncomplete = () => res(o);
           t.onerror = () => rej(t.error);
         });
+        for (const k of Object.keys(out)) {
+          out[k] = await unseal(s, out[k]);
+          if (out[k] == null) delete out[k];
+        }
+        return out;
       },
+      encrypted: async () => !!(await encKey()),
     };
   })();
+
+  // Ältere, unverschlüsselte Chats und Bilder einmalig verschlüsseln (läuft nach dem Start im Hintergrund)
+  async function migrateEncryption() {
+    if (store.load('encDone', false) || !(await db.encrypted())) return;
+    try {
+      for (const id of Object.keys(chats)) {
+        const raw = await db.raw('chats', id);
+        if (raw != null && !LIB.isSealed(raw)) await db.put('chats', id, chats[id] || raw); // aktueller Stand aus dem Speicher
+      }
+      for (const k of await db.keys('media')) {
+        const raw = await db.raw('media', k);
+        if (raw != null && !LIB.isSealed(raw)) await db.put('media', k, raw);
+        await new Promise((r) => setTimeout(r, 5)); // die Oberfläche nicht blockieren
+      }
+      store.save('encDone', true);
+    } catch (e) { console.warn('Verschlüsseln des Verlaufs:', e); }
+  }
 
   // ================= Zustand =================
   let me = store.load('me', null);                 // { code, name, status, avatar }
@@ -94,6 +143,7 @@
   const settings = Object.assign({
     theme: 'system', notify: true, sound: true, preview: true, autoUpdate: true,
     runInBackground: true, openAtLogin: false, bgHintShown: false, relay: true, popupNotify: true, leaderboard: true,
+    typing: true, gifSearch: true,
   }, store.load('settings', {}));
   const saveSettings = () => store.save('settings', settings);
   let unlocked = store.load('achievements', {});   // id -> Zeitstempel
@@ -163,6 +213,7 @@
     });
     delete chats[chatId];
     delete unread[chatId];
+    if (chatTimers[chatId]) { delete chatTimers[chatId]; store.save('chatTimers', chatTimers); }
     db.del('chats', chatId).catch(() => {});
   }
 
@@ -211,6 +262,12 @@
 
   function validMedia(m) {
     if (!m || typeof m !== 'object') return null;
+    if (m.kind === 'file') {
+      // Beliebige Datei: immer als neutrale Daten gespeichert, nie als Bild/Seite geöffnet
+      if (typeof m.data !== 'string' || m.data.length > MAX_MEDIA || !m.data.startsWith(LIB.FILE_PREFIX)) return null;
+      const mime = typeof m.mime === 'string' && /^[\w.+-]{1,60}\/[\w.+-]{1,80}$/.test(m.mime) ? m.mime : '';
+      return { kind: 'file', data: m.data, name: LIB.safeFileName(m.name), size: LIB.dataUrlBytes(m.data), mime };
+    }
     if (m.kind === 'sticker') {
       if (typeof m.data !== 'string' || m.data.length > STICKER_MAX || !/^data:image\/(png|webp);base64,/.test(m.data.slice(0, 30))) return null;
       return { kind: 'sticker', data: m.data, w: 512, h: 512 };
@@ -235,7 +292,8 @@
   }
 
   // Was von einer Datei in der Nachricht gespeichert wird (die Daten selbst liegen in IndexedDB)
-  const mediaMeta = (m) => (m.kind === 'audio' ? { kind: 'audio', dur: m.dur || 0, wave: m.wave || [] }
+  const mediaMeta = (m) => (m.kind === 'file' ? { kind: 'file', name: m.name, size: m.size || 0, mime: m.mime || '' }
+    : m.kind === 'audio' ? { kind: 'audio', dur: m.dur || 0, wave: m.wave || [] }
     : m.kind === 'video' ? { kind: 'video', w: m.w, h: m.h, dur: m.dur || 0, poster: m.poster || null }
     : { kind: m.kind, w: m.w, h: m.h });
 
@@ -482,6 +540,12 @@
       case 'status': case 'sdel': case 'slist': case 'sget': case 'sreact': case 'sseen':
         stories.handle(code, data).catch(console.error);
         break;
+      case 'typing': { // „schreibt…“ – nur direkt, nie über den Server
+        if (data.gid && !(groups[data.gid] && groups[data.gid].members.includes(code))) break;
+        if (!data.gid && !isFriend(code)) break;
+        setTyping(data.gid ? 'g:' + data.gid : 'u:' + code, code, !data.stop);
+        break;
+      }
       case 'gleave': {
         const g = groups[data.gid];
         if (!g || !g.members.includes(code)) return;
@@ -509,6 +573,7 @@
     const id = String(data.id || '').slice(0, 64);
     if (!id) return;
     checkProfileVersion(from, data.pv);
+    setTyping(chatId, from, false); // Nachricht ist da: „schreibt…“ ausblenden
     const list = (chats[chatId] = chats[chatId] || []);
     // Wurde schon „für alle gelöscht“, bevor sie ankam? Dann gar nicht erst anzeigen
     if (tombstones[chatId + '|' + id]) {
@@ -526,6 +591,9 @@
       if (reply) msg.reply = reply;
       const poll = validPoll(data.poll);
       if (poll) msg.poll = poll;
+      if (data.fwd) msg.fwd = true;
+      const exp = LIB.validTimer(data.exp);
+      if (exp) msg.exp = exp;
       if (media) { msg.media = mediaMeta(media); putMedia(chatId, id, media.data); }
       list.push(msg);
       saveChat(chatId);
@@ -562,6 +630,8 @@
     const wire = { id: msg.id, text: msg.text, ts: msg.ts, pv: me.pv || 0 };
     if (msg.reply) wire.reply = msg.reply;
     if (msg.poll) wire.poll = msg.poll;
+    if (msg.fwd) wire.fwd = 1;
+    if (msg.exp) wire.exp = msg.exp;
     if (msg.media) {
       const data = await getMedia(chatId, msg.id);
       if (!data) return;
@@ -576,6 +646,7 @@
       if (msg.media.kind === 'audio' && peerV < 4) wire.text = '🎤 Sprachnachricht – aktualisiere WhatsUp, um sie anzuhören.';
       else if (msg.media.kind === 'sticker' && peerV < 5) wire.text = '🩷 Sticker – aktualisiere WhatsUp, um ihn zu sehen.';
       else if (msg.media.kind === 'video' && peerV < 6) wire.text = '🎥 Video – aktualisiere WhatsUp, um es anzusehen.';
+      else if (msg.media.kind === 'file' && peerV < 7) wire.text = `📄 Datei „${msg.media.name}“ – aktualisiere WhatsUp, um sie zu öffnen.` + (msg.text ? '\n' + msg.text : '');
       else wire.media = { ...mediaMeta(msg.media), data };
     }
     if (chatId.startsWith('g:')) { wire.type = 'gmsg'; wire.gid = chatId.slice(2); } else wire.type = 'msg';
@@ -630,8 +701,12 @@
     const to = recipientsOf(chatId);
     const msg = { id: crypto.randomUUID(), from: me.code, text, ts: Date.now(), to, sentTo: [], deliveredTo: [] };
     if (extra.poll) msg.poll = extra.poll; // Umfrage (Text ist der Hinweis für ältere Versionen)
+    if (extra.fwd) msg.fwd = true;         // weitergeleitet
+    const exp = timerOf(chatId);            // verschwindende Nachrichten
+    if (exp) msg.exp = exp;
+    stopTyping(chatId);
     // Antwort auf eine Nachricht?
-    if (pendingReply && pendingReply.chatId === chatId) {
+    if (!extra.fwd && pendingReply && pendingReply.chatId === chatId) {
       const orig = findMsg(chatId, pendingReply.id);
       if (orig && !orig.deleted) msg.reply = replyRef(orig);
       clearReply();
@@ -648,13 +723,273 @@
     stats.sent++;
     if (typeof games === 'object') games.nudge();
     if (chatId.startsWith('g:')) stats.groupSent++;
-    if (media) { if (media.kind === 'audio') stats.voices = (stats.voices || 0) + 1; else if (media.kind === 'video') stats.videos = (stats.videos || 0) + 1; else if (media.kind === 'gif') stats.gifs++; else stats.images++; }
+    if (media) { if (media.kind === 'audio') stats.voices = (stats.voices || 0) + 1; else if (media.kind === 'video') stats.videos = (stats.videos || 0) + 1; else if (media.kind === 'file') stats.files = (stats.files || 0) + 1; else if (media.kind === 'gif') stats.gifs++; else stats.images++; }
     stats.emojis += emojiCount(text);
     const h = new Date().getHours();
     if (h < 4) stats.night++;
     if (h >= 5 && h < 7) stats.early++;
     touchDay();
     saveMeta(); checkAchievements(); scheduleRender();
+  }
+
+  // ================= „schreibt…“ =================
+  // Geht nur direkt an Verbundene (nie über den Server). Abschaltbar unter Einstellungen → Chats.
+  const typing = {}; // chatId -> { code: sichtbar bis }
+  let typingSentAt = 0, typingChat = null;
+  function typersOf(chatId) {
+    const t = typing[chatId], now = Date.now();
+    return t ? Object.keys(t).filter((c) => t[c] > now) : [];
+  }
+  function typingText(chatId) {
+    const codes = typersOf(chatId);
+    if (!codes.length) return '';
+    if (chatId.startsWith('u:')) return 'schreibt…';
+    return codes.length === 1 ? `${nameOf(codes[0])} schreibt…` : `${codes.length} schreiben…`;
+  }
+  function setTyping(chatId, code, on) {
+    const t = typing[chatId] || {};
+    const had = !!t[code];
+    if (on) { t[code] = Date.now() + 6000; typing[chatId] = t; setTimeout(refreshTyping, 6100); }
+    else delete t[code];
+    if (!Object.keys(t).length) delete typing[chatId];
+    if (on || had) refreshTyping();
+  }
+  // Nur Kopfzeile und Chatliste neu zeichnen (nicht den ganzen Verlauf)
+  function refreshTyping() {
+    const now = Date.now();
+    for (const [cid, t] of Object.entries(typing)) {
+      Object.keys(t).forEach((c) => { if (t[c] <= now) delete t[c]; });
+      if (!Object.keys(t).length) delete typing[cid];
+    }
+    if (!me) return;
+    if (view === 'viewList') renderList();
+    else if (view === 'viewChat' && activeChat) renderChatHead(activeChat);
+  }
+  function sendTypingTo(chatId, stop) {
+    const gid = chatId.startsWith('g:') ? chatId.slice(2) : null;
+    const data = { type: 'typing' };
+    if (gid) data.gid = gid;
+    if (stop) data.stop = 1;
+    recipientsOf(chatId).forEach((code) => sendTo(code, data));
+  }
+  function onComposerInput() {
+    if (!activeChat || settings.typing === false) return;
+    if (!$('msgInput').value.trim()) { stopTyping(activeChat); return; }
+    if (typingChat === activeChat && Date.now() - typingSentAt < 3000) return;
+    typingSentAt = Date.now();
+    typingChat = activeChat;
+    sendTypingTo(activeChat, false);
+  }
+  function stopTyping(chatId) {
+    if (!chatId || typingChat !== chatId || !typingSentAt) return;
+    typingSentAt = 0;
+    typingChat = null;
+    sendTypingTo(chatId, true);
+  }
+
+  // ================= Verschwindende Nachrichten =================
+  // Pro Chat einstellbar. Jede Nachricht trägt ihre Zeit (exp) selbst, damit sie bei allen gleich verschwindet.
+  const chatTimers = store.load('chatTimers', {}); // chatId -> { secs, ts }
+  const timerOf = (chatId) => (chatTimers[chatId] && chatTimers[chatId].secs) || 0;
+  function setChatTimer(chatId, secs) {
+    if (LIB.validTimer(secs) === null || secs === timerOf(chatId)) return;
+    chatTimers[chatId] = { secs, ts: Date.now() };
+    store.save('chatTimers', chatTimers);
+    systemMessage(chatId, secs ? `⏱ Du hast verschwindende Nachrichten eingeschaltet. Neue Nachrichten verschwinden nach ${LIB.timerLabel(secs)}.` : '⏱ Du hast verschwindende Nachrichten ausgeschaltet.');
+    sendAction(chatId, { act: 'timer', secs });
+    scheduleRender();
+  }
+  function receiveTimer(chatId, from, data) {
+    const secs = LIB.validTimer(data.secs);
+    if (secs === null) return;
+    const ts = clampTs(data.ts);
+    const cur = chatTimers[chatId];
+    if (cur && ts <= cur.ts) return; // nur die neueste Einstellung zählt
+    const changed = (cur ? cur.secs : 0) !== secs;
+    chatTimers[chatId] = { secs, ts };
+    store.save('chatTimers', chatTimers);
+    if (changed) {
+      systemMessage(chatId, secs ? `⏱ ${nameOf(from)} hat verschwindende Nachrichten eingeschaltet. Neue Nachrichten verschwinden nach ${LIB.timerLabel(secs)}.` : `⏱ ${nameOf(from)} hat verschwindende Nachrichten ausgeschaltet.`);
+      scheduleRender();
+    }
+  }
+  // Abgelaufene Nachrichten (inkl. Bilder/Dateien) löschen – beim Start und jede Minute
+  function pruneExpired() {
+    const now = Date.now();
+    let any = false;
+    for (const [chatId, list] of Object.entries(chats)) {
+      if (!list.some((m) => LIB.isExpired(m, now))) continue;
+      chats[chatId] = list.filter((m) => {
+        if (!LIB.isExpired(m, now)) return true;
+        removeMedia(chatId, m);
+        if (pendingReply && pendingReply.id === m.id) clearReply();
+        return false;
+      });
+      saveChat(chatId);
+      any = true;
+    }
+    if (any) scheduleRender();
+  }
+  function openTimer(chatId) {
+    openModal((box) => {
+      box.appendChild(el('h3', '', '⏱ Verschwindende Nachrichten'));
+      box.appendChild(el('p', 'muted', 'Neue Nachrichten in diesem Chat verschwinden nach der gewählten Zeit, bei dir und bei allen anderen im Chat. Nachrichten von vorher bleiben. Wer noch eine WhatsUp-Version vor 1.29 hat, behält die Nachrichten.'));
+      const seg = el('div', 'segmented timer-seg');
+      LIB.TIMER_OPTS.forEach((s) => {
+        const b = el('button', s === timerOf(chatId) ? 'active' : '', LIB.timerLabel(s));
+        b.type = 'button';
+        b.onclick = () => { setChatTimer(chatId, s); openTimer(chatId); };
+        seg.appendChild(b);
+      });
+      box.appendChild(seg);
+      box.appendChild(buttons(['Zurück', 'primary', () => openInfo()]));
+    });
+  }
+
+  // ================= Weiterleiten =================
+  const chatTitle = (chatId) => (chatId.startsWith('g:') ? (groups[chatId.slice(2)] || {}).name || 'Gruppe' : nameOf(chatId.slice(2)));
+  const canForward = (m) => !m.deleted && !m.sys && !m.poll && (m.text || m.media) && !(m.media && m.media.kind === 'sticker' && !stickers.isOwner());
+  function openForward(chatId, m) {
+    const targets = [...friendCodes().map((c) => 'u:' + c), ...Object.keys(groups).map((g) => 'g:' + g)]
+      .sort((a, b) => ((lastMsg(b) || {}).ts || 0) - ((lastMsg(a) || {}).ts || 0));
+    openModal((box) => {
+      box.appendChild(el('h3', '', '↪️ Weiterleiten an…'));
+      box.appendChild(el('div', 'info-msg', snippet(preview(m), 120) || 'Nachricht'));
+      const ul = el('ul', 'checklist');
+      targets.forEach((id) => {
+        const li = el('li');
+        const lab = el('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.value = id;
+        lab.append(cb, chatAvatar(id, 'sm'), el('span', '', chatTitle(id)));
+        li.appendChild(lab);
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+      const err = el('div', 'status err');
+      box.appendChild(err);
+      const actions = buttons(['Abbrechen', 'ghost', closeModal], ['Senden', 'primary', async () => {
+        const sel = [...ul.querySelectorAll('input:checked')].map((i) => i.value);
+        if (!sel.length) { err.textContent = 'Wähle mindestens einen Chat aus.'; return; }
+        closeModal();
+        await forwardTo(chatId, m, sel);
+      }]);
+      box.appendChild(actions);
+      const sendB = actions.querySelector('.primary');
+      ul.addEventListener('change', () => { const n = ul.querySelectorAll('input:checked').length; sendB.textContent = n ? `Senden (${n})` : 'Senden'; });
+    });
+  }
+  async function forwardTo(chatId, m, targets) {
+    let media = null;
+    if (m.media) {
+      const data = await getMedia(chatId, m.id);
+      if (!data) { toast('⚠️ Die Datei ist auf diesem Gerät nicht mehr vorhanden'); return; }
+      media = { ...m.media, data };
+    }
+    for (const t of targets) await sendMessage(t, m.text || '', media, { fwd: true });
+    toast(`↪️ An ${targets.length === 1 ? chatTitle(targets[0]) : targets.length + ' Chats'} weitergeleitet`);
+  }
+
+  // ================= Dateien senden =================
+  async function sendFile(file) {
+    if (!activeChat || !file) return;
+    if (!file.size) { toast('⚠️ Die Datei ist leer'); return; }
+    if (file.size > MAX_MB * 1024 * 1024) { toast(`⚠️ Die Datei ist zu groß (max. ${MAX_MB} MB)`); return; }
+    try {
+      toast('📤 Datei wird vorbereitet…');
+      const data = LIB.toFileDataUrl(await readAsDataURL(file));
+      if (!data) throw new Error('Die Datei konnte nicht gelesen werden.');
+      const mime = /^[\w.+-]{1,60}\/[\w.+-]{1,80}$/.test(file.type) ? file.type : '';
+      const media = { kind: 'file', data, name: LIB.safeFileName(file.name), size: file.size, mime };
+      const caption = $('msgInput').value.trim();
+      $('msgInput').value = '';
+      voice.syncComposer();
+      await sendMessage(activeChat, caption, media);
+    } catch (e) {
+      toast('⚠️ ' + (e.message || e));
+    }
+  }
+  function fileEl(chatId, m) {
+    const card = el('button', 'file-card');
+    card.type = 'button';
+    card.title = 'Speichern';
+    card.appendChild(el('span', 'file-ic', LIB.fileIcon(m.media.name)));
+    const meta = el('span', 'file-meta');
+    meta.appendChild(el('span', 'file-name', m.media.name));
+    const ext = LIB.extOf(m.media.name);
+    meta.appendChild(el('span', 'file-size', fmtBytes(m.media.size || 0) + (ext ? ' · ' + ext.toUpperCase() : '') + ' · Speichern'));
+    card.appendChild(meta);
+    card.onclick = (e) => { e.stopPropagation(); saveFile(chatId, m); };
+    return card;
+  }
+  async function saveFile(chatId, m) {
+    const d = await getMedia(chatId, m.id);
+    if (!d || !d.startsWith(LIB.FILE_PREFIX)) { toast('⚠️ Die Datei ist auf diesem Gerät nicht mehr vorhanden'); return; }
+    const name = LIB.safeFileName(m.media.name);
+    if (LIB.isRiskyFile(name) && !confirm(`„${name}“ kann beim Öffnen Programme ausführen. Speichere und öffne die Datei nur, wenn du sie erwartet hast und dem Absender vertraust.\n\nTrotzdem speichern?`)) return;
+    const blob = new Blob([LIB.unb64(d.slice(LIB.FILE_PREFIX.length))], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  }
+
+  // ================= Suche =================
+  const msgSearchText = (m) => (m.sys || m.deleted ? '' : [m.text, m.poll && m.poll.q, m.poll && m.poll.opts.join(' '), m.media && m.media.name].filter(Boolean).join(' '));
+  // Zu einer Nachricht im offenen Chat springen und sie kurz aufleuchten lassen
+  function jumpToMsg(id) {
+    const target = $('messages').querySelector(`[data-id="${CSS.escape(id)}"]`);
+    if (!target) return false;
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.remove('flash'); void target.offsetWidth; target.classList.add('flash');
+    return true;
+  }
+  // Suche im offenen Chat (Lupe oben rechts)
+  let chatSearch = null; // { hits: [id], i }
+  function openChatSearch() {
+    $('chatSearchBar').classList.remove('hidden');
+    $('chatSearchIn').value = '';
+    chatSearch = { hits: [], i: -1 };
+    $('chatSearchCount').textContent = '';
+    $('chatSearchIn').focus();
+  }
+  function closeChatSearch() {
+    if (!chatSearch) return;
+    chatSearch = null;
+    $('chatSearchBar').classList.add('hidden');
+    if (view === 'viewChat') renderChat();
+  }
+  function runChatSearch() {
+    if (!chatSearch || !activeChat) return;
+    const q = $('chatSearchIn').value;
+    chatSearch.hits = (chats[activeChat] || []).filter((m) => LIB.matchText(msgSearchText(m), q)).map((m) => m.id);
+    chatSearch.i = chatSearch.hits.length - 1; // neuester Treffer zuerst
+    showHit();
+  }
+  function stepHit(d) {
+    if (!chatSearch || !chatSearch.hits.length) return;
+    chatSearch.i = (chatSearch.i + d + chatSearch.hits.length) % chatSearch.hits.length;
+    showHit();
+  }
+  function showHit() {
+    const n = chatSearch.hits.length;
+    $('chatSearchCount').textContent = $('chatSearchIn').value.trim() ? (n ? `${chatSearch.i + 1}/${n}` : '0') : '';
+    renderChat();
+    if (n) jumpToMsg(chatSearch.hits[chatSearch.i]);
+  }
+  // Suche über alle Chats (Feld über der Chatliste)
+  function searchAll(q) {
+    const out = [];
+    for (const [chatId, list] of Object.entries(chats)) {
+      const ok = chatId.startsWith('g:') ? groups[chatId.slice(2)] : isFriend(chatId.slice(2));
+      if (!ok) continue;
+      list.forEach((m) => { if (LIB.matchText(msgSearchText(m), q)) out.push({ chatId, m }); });
+    }
+    return out.sort((a, b) => b.m.ts - a.m.ts).slice(0, 40);
   }
 
   // ================= Antworten, Reaktionen, Löschen =================
@@ -770,6 +1105,7 @@
     } else chatId = 'u:' + from;
     // Empfang bestätigen, damit der Absender nicht mehr über den Server nachschickt
     if (typeof data.aid === 'string') sendTo(from, { type: 'mack', aid: data.aid.slice(0, 64) });
+    if (data.act === 'timer') { receiveTimer(chatId, from, data); return; }
     const id = String(data.id || '').slice(0, 64);
     const m = findMsg(chatId, id);
     if (data.act === 'del') {
@@ -931,6 +1267,8 @@
         bar.appendChild(plus);
         menu.appendChild(bar);
         menu.appendChild(act('Antworten', '↩️', () => { closeMsgMenu(); startReply(chatId, m); }));
+        if (canForward(m)) menu.appendChild(act('Weiterleiten', '↪️', () => { closeMsgMenu(); openForward(chatId, m); }));
+        if (m.media && m.media.kind === 'file') menu.appendChild(act('Speichern', '💾', () => { closeMsgMenu(); saveFile(chatId, m); }));
         if (m.from === me.code && m.to && m.to.length) menu.appendChild(act('Info', 'ℹ️', () => { closeMsgMenu(); openMsgInfo(chatId, m); }));
         if (m.text) menu.appendChild(act('Kopieren', '📋', async () => {
           closeMsgMenu();
@@ -1300,7 +1638,7 @@
   const fmtDay = (ts) => new Date(ts).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
   const durText = (s) => { s = Math.round(s || 0); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   const preview = (m) => (m.deleted ? '🚫 Diese Nachricht wurde gelöscht' : m.poll ? '📊 ' + m.poll.q : m.media
-    ? (m.media.kind === 'sticker' ? '🩷 Sticker' : m.media.kind === 'audio' ? '🎤 Sprachnachricht (' + durText(m.media.dur) + ')' : m.media.kind === 'video' ? '🎥 Video (' + durText(m.media.dur) + ')' : m.media.kind === 'gif' ? '🎞️ GIF' : '📷 Bild') + (m.text ? ' ' + m.text : '')
+    ? (m.media.kind === 'file' ? '📄 ' + m.media.name : m.media.kind === 'sticker' ? '🩷 Sticker' : m.media.kind === 'audio' ? '🎤 Sprachnachricht (' + durText(m.media.dur) + ')' : m.media.kind === 'video' ? '🎥 Video (' + durText(m.media.dur) + ')' : m.media.kind === 'gif' ? '🎞️ GIF' : '📷 Bild') + (m.text ? ' ' + m.text : '')
     : m.text);
 
   function el(tag, cls, text) {
@@ -1470,14 +1808,19 @@
     $('meName').textContent = me.name;
     $('myCode').textContent = me.code;
 
-    const items = [
+    const q = $('listSearch').value.trim();
+    let items = [
       ...friendCodes().map((c) => 'u:' + c),
       ...Object.keys(groups).map((g) => 'g:' + g),
     ].sort((a, b) => ((lastMsg(b) || {}).ts || 0) - ((lastMsg(a) || {}).ts || 0));
+    if (q) items = items.filter((id) => LIB.matchText(chatTitle(id), q));
+    const hits = q ? searchAll(q) : [];
 
     const ul = $('chatList');
     ul.replaceChildren();
-    $('emptyList').classList.toggle('hidden', items.length > 0);
+    $('emptyList').textContent = q ? 'Nichts gefunden' : 'Noch keine Chats';
+    $('emptyList').classList.toggle('hidden', items.length > 0 || hits.length > 0);
+    if (q && items.length) ul.appendChild(el('li', 'search-head', 'Chats'));
     items.forEach((chatId) => {
       const isGroup = chatId.startsWith('g:');
       const code = chatId.slice(2);
@@ -1493,12 +1836,33 @@
       if (last) sub = last.sys ? last.text : (last.from === me.code ? 'Du: ' : isGroup ? nameOf(last.from) + ': ' : '') + preview(last);
       else if (isGroup) sub = `${groups[code].members.length} Mitglieder`;
       else sub = (isOnline(code) ? 'Online' : 'Offline') + (contacts[code].status ? ' · ' + contacts[code].status : '');
-      meta.appendChild(el('div', 'flast', sub));
+      const tt = typingText(chatId);
+      meta.appendChild(el('div', 'flast' + (tt ? ' typing' : ''), tt || sub));
       li.appendChild(meta);
       if (unread[chatId]) li.appendChild(el('span', 'badge', String(unread[chatId])));
       li.onclick = () => openChat(chatId);
       ul.appendChild(li);
     });
+    // Treffer in Nachrichten: antippen öffnet den Chat an der Stelle
+    if (hits.length) {
+      ul.appendChild(el('li', 'search-head', 'Nachrichten'));
+      hits.forEach(({ chatId, m }) => {
+        const li = el('li', 'search-hit');
+        li.appendChild(chatAvatar(chatId, 'sm'));
+        const meta = el('div', 'fmeta');
+        const head = el('div', 'fname', chatTitle(chatId));
+        head.appendChild(el('span', 'search-date', new Date(m.ts).toLocaleDateString('de-DE')));
+        meta.appendChild(head);
+        meta.appendChild(el('div', 'flast', (m.from === me.code ? 'Du: ' : chatId.startsWith('g:') ? nameOf(m.from) + ': ' : '') + snippet(preview(m), 80)));
+        li.appendChild(meta);
+        li.onclick = () => {
+          $('listSearch').value = '';
+          openChat(chatId);
+          setTimeout(() => jumpToMsg(m.id), 60);
+        };
+        ul.appendChild(li);
+      });
+    }
   }
 
   // ================= Umfragen in Gruppen =================
@@ -1700,12 +2064,11 @@
     });
   }
 
-  function renderChat() {
-    const chatId = activeChat;
+  // Kopfzeile des Chats: Bild, Name, online/Mitglieder, „schreibt…“, Timer
+  function renderChatHead(chatId) {
     const isGroup = chatId.startsWith('g:');
     const code = chatId.slice(2);
-    if (isGroup ? !groups[code] : !contacts[code]) { closeChat(); return; }
-
+    if (isGroup ? !groups[code] : !contacts[code]) return;
     $('chatAvatar').replaceChildren(chatAvatar(chatId, '', !isGroup));
     $('callBtns').classList.toggle('hidden', isGroup); // Anrufe nur im Einzelchat
     $('pollBtn').classList.toggle('hidden', !isGroup); // Umfragen nur in Gruppen
@@ -1723,6 +2086,19 @@
       if (c.banner && c.status) { $('chatSub').append(' · '); $('chatSub').appendChild(bannerEl(c.status, c.banner, true)); }
       $('chatName').title = fb ? 'Streak: Schreibt euch jeden Tag beide mindestens eine Nachricht, sonst ist er weg.' : '';
     }
+    const tt = typingText(chatId);
+    if (tt) $('chatSub').textContent = tt;
+    $('chatSub').classList.toggle('typing', !!tt);
+    const tm = timerOf(chatId);
+    if (tm && !tt) $('chatSub').prepend(`⏱ ${LIB.timerShort(tm)} · `);
+  }
+
+  function renderChat() {
+    const chatId = activeChat;
+    const isGroup = chatId.startsWith('g:');
+    const code = chatId.slice(2);
+    if (isGroup ? !groups[code] : !contacts[code]) { closeChat(); return; }
+    renderChatHead(chatId);
 
     const box = $('messages');
     const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
@@ -1750,18 +2126,24 @@
       const big = !m.media && !m.reply && !m.deleted && onlyEmoji(m.text);
       const isVoice = m.media && m.media.kind === 'audio';
       const isSticker = m.media && m.media.kind === 'sticker';
+      const isFile = m.media && m.media.kind === 'file';
+      const hit = chatSearch && chatSearch.hits.includes(m.id);
       const div = el('div', 'msg ' + (mine ? 'me' : 'them') + (big ? ' big' : '') + (m.deleted ? ' deleted' : '') + (m.reactions && !m.deleted ? ' has-reacts' : '') + (m.reply && !m.deleted ? ' has-quote' : '')
-        + (isSticker ? ' sticker' : isVoice ? ' has-voice' : m.media ? ' has-media' : ''));
+        + (isSticker ? ' sticker' : isVoice ? ' has-voice' : isFile ? ' has-file' : m.media ? ' has-media' : '')
+        + (hit ? ' hit' : '') + (hit && chatSearch.hits[chatSearch.i] === m.id ? ' hit-cur' : ''));
       div.dataset.id = m.id;
+      if (m.fwd && !m.deleted) div.appendChild(el('div', 'fwd', '↪ Weitergeleitet'));
       if (m.reply && !m.deleted) div.appendChild(quoteEl(chatId, m.reply));
       if (m.deleted) div.appendChild(el('div', 'text', mine ? '🚫 Du hast diese Nachricht gelöscht' : '🚫 Diese Nachricht wurde gelöscht'));
+      else if (isFile) div.appendChild(fileEl(chatId, m));
       else if (isSticker) div.appendChild(stickers.view(chatId, m));
       else if (isVoice) div.appendChild(voice.el(chatId, m));
       else if (m.media && m.media.kind === 'video') div.appendChild(video.el(chatId, m));
       else if (m.media) div.appendChild(mediaEl(chatId, m));
       if (m.poll && !m.deleted) { div.classList.add('has-poll'); div.appendChild(pollEl(chatId, m)); }
       else if (m.text) div.appendChild(el('div', 'text', m.text));
-      const meta = el('div', 'meta', fmtTime(m.ts));
+      const meta = el('div', 'meta', (m.exp && !m.deleted ? '⏱ ' : '') + fmtTime(m.ts));
+      if (m.exp && !m.deleted) meta.title = `Verschwindet am ${new Date(m.ts + m.exp * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
       if (mine && m.to && m.to.length && !m.deleted) {
         const read = m.readBy ? m.to.filter((c) => m.readBy[c]).length : 0;
         const tick = read >= m.to.length ? '✓✓' : m.deliveredTo.length >= m.to.length ? '✓✓' : m.deliveredTo.length || m.sentTo.length ? '✓' : '🕓';
@@ -1816,7 +2198,11 @@
 
   // ================= Navigation =================
   function openChat(chatId) {
-    if (activeChat !== chatId) { voice.stop(false); voice.stopPlayback(); clearReply(); closeMsgMenu(); video.close(); video.closePlayer(); }
+    if (activeChat !== chatId) {
+      voice.stop(false); voice.stopPlayback(); clearReply(); closeMsgMenu(); video.close(); video.closePlayer();
+      stopTyping(activeChat);
+      chatSearch = null; $('chatSearchBar').classList.add('hidden');
+    }
     activeChat = chatId;
     setTimeout(() => voice.syncComposer(), 0);
     delete unread[chatId];
@@ -1831,6 +2217,8 @@
   function closeChat() {
     voice.stop(false);
     voice.stopPlayback();
+    stopTyping(activeChat);
+    chatSearch = null; $('chatSearchBar').classList.add('hidden');
     activeChat = null;
     clearReply(); closeMsgMenu(); video.close(); video.closePlayer();
     closeModal();
@@ -1919,6 +2307,77 @@
     return row;
   }
 
+  // Zeile „Verschwindende Nachrichten · Aus  Ändern“ für die Chat-Infos
+  function timerRow(chatId, before) {
+    const row = el('div', 'setting clear-row');
+    const label = el('span', '', '⏱ Verschwindende Nachrichten');
+    label.appendChild(el('span', 'muted', ' · ' + LIB.timerLabel(timerOf(chatId))));
+    const btn = el('button', 'link', 'Ändern');
+    btn.type = 'button';
+    btn.id = 'timerBtn';
+    btn.onclick = () => { if (before) before(); openTimer(chatId); };
+    row.append(label, btn);
+    return row;
+  }
+
+  // ---- Sicherheitsnummer (wie bei Signal) ----
+  // Beide vergleichen dieselben 60 Ziffern. Ändert sich der Schlüssel (neues Gerät, Backup), ändert sich die Nummer.
+  const safetyFor = (code) => LIB.safetyNumber(me.code, relay.publicKeys(), code, contacts[code] && contacts[code].keys);
+  function safetyRow(code) {
+    const c = contacts[code] || {};
+    const row = el('div', 'setting clear-row');
+    const label = el('span', '', '🔐 Sicherheitsnummer');
+    const state = el('span', 'muted', '');
+    label.appendChild(state);
+    safetyFor(code).then((n) => { if (n && c.verified === n) state.textContent = ' · ✓ bestätigt'; }).catch(() => {});
+    const btn = el('button', 'link', 'Anzeigen');
+    btn.type = 'button';
+    btn.id = 'safetyBtn';
+    btn.onclick = () => openSafety(code);
+    row.append(label, btn);
+    return row;
+  }
+  async function openSafety(code) {
+    const c = contacts[code];
+    if (!c) return;
+    const num = await safetyFor(code).catch(() => null);
+    openModal((box) => {
+      box.appendChild(el('h3', '', '🔐 Sicherheitsnummer'));
+      if (!num) {
+        box.appendChild(el('p', 'muted', `Noch nicht verfügbar. Die Nummer gibt es, sobald ihr einmal direkt verbunden wart und bei euch beiden die Offline-Zustellung (Einstellungen) eingeschaltet ist.`));
+        box.appendChild(buttons(['Zurück', 'primary', () => openInfo()]));
+        return;
+      }
+      box.appendChild(el('p', 'muted', `Vergleiche diese Nummer mit ${c.name}, am besten persönlich oder in einem Anruf. Steht bei euch beiden dieselbe Nummer, ist eure Verschlüsselung echt und niemand sitzt dazwischen.`));
+      const grid = el('div', 'safety-grid');
+      LIB.groupDigits(num).forEach((g) => grid.appendChild(el('span', '', g)));
+      box.appendChild(grid);
+      const ok = c.verified === num;
+      box.appendChild(el('div', 'safety-state' + (ok ? ' ok' : ''), ok ? '✓ Von dir als bestätigt markiert' : 'Noch nicht bestätigt'));
+      box.appendChild(buttons(
+        ['Kopieren', 'ghost', async () => { try { await navigator.clipboard.writeText(LIB.groupDigits(num).join(' ')); toast('Nummer kopiert'); } catch { toast('Kopieren fehlgeschlagen'); } }],
+        [ok ? 'Bestätigung entfernen' : 'Als bestätigt markieren', ok ? 'ghost' : 'primary', () => {
+          if (ok) delete c.verified; else c.verified = num;
+          saveMeta();
+          toast(ok ? 'Bestätigung entfernt' : `✓ ${c.name} ist bestätigt`);
+          openSafety(code);
+        }],
+        ['Zurück', 'ghost', () => openInfo()],
+      ));
+    });
+  }
+  // Schlüssel eines Kontakts haben sich geändert (neues Gerät, Konto-Umzug oder Backup)
+  function keysChanged(code) {
+    const c = contacts[code];
+    if (!c) return;
+    const wasVerified = !!c.verified;
+    delete c.verified;
+    if (isFriend(code) && chats['u:' + code] && chats['u:' + code].length) {
+      systemMessage('u:' + code, `🔐 Die Sicherheitsnummer von ${c.name} hat sich geändert (z. B. neues Gerät oder Backup).` + (wasVerified ? ' Prüfe sie neu: oben auf den Namen tippen.' : ''));
+      scheduleRender();
+    }
+  }
+
   // Profil eines beliebigen Nutzers (z. B. aus UpReels) – aufgebaut wie die Chat-Info
   function openProfile(code, name) {
     const c = contacts[code];
@@ -1998,6 +2457,8 @@
         box.appendChild(head);
         if (c.ach && c.ach.length) box.appendChild(rareAchievementsEl(c.ach));
         box.appendChild(reels.profileSection(code, c.name));
+        box.appendChild(timerRow(activeChat));
+        box.appendChild(safetyRow(code));
         box.appendChild(clearRow(activeChat));
         box.appendChild(buttons(['Freund entfernen', 'danger', () => {
           if (confirm(`${c.name} entfernen? Der Chatverlauf wird gelöscht. ${c.name} kann dich erst wieder erreichen, wenn du den Code erneut addest.`)) removeFriend(code);
@@ -2071,6 +2532,7 @@
       box.appendChild(ul);
       // Erst nach allen Mitgliedern, klein: Chatverlauf leeren und Gruppe verlassen
       const extra = el('div', 'group-extra');
+      extra.appendChild(timerRow(activeChat, saveIfDirty));
       extra.appendChild(clearRow(activeChat));
       const leave = el('button', 'group-leave', '🚪 Gruppe verlassen');
       leave.type = 'button';
@@ -2152,16 +2614,18 @@
     const tabs = $('emojiTabs');
     tabs.replaceChildren();
     if (emojiTab === 'stickers' && !stickers.isOwner()) emojiTab = 'recent';
-    [...(stickers.isOwner() ? [['stickers', '🩷']] : []), ['recent', '🕓'], ...Object.keys(EMOJI).map((k) => [k, k])].forEach(([key, icon]) => {
-      const b = el('button', 'emoji-tab' + (key === emojiTab ? ' active' : ''), icon);
+    if (emojiTab === 'gif' && !gif.enabled()) emojiTab = 'recent';
+    [...(stickers.isOwner() ? [['stickers', '🩷']] : []), ...(gif.enabled() ? [['gif', 'GIF']] : []), ['recent', '🕓'], ...Object.keys(EMOJI).map((k) => [k, k])].forEach(([key, icon]) => {
+      const b = el('button', 'emoji-tab' + (key === emojiTab ? ' active' : '') + (key === 'gif' ? ' gif-tab' : ''), icon);
       b.type = 'button';
       b.onclick = () => { emojiTab = key; renderEmojiPanel(); };
       tabs.appendChild(b);
     });
     const grid = $('emojiGrid');
     grid.replaceChildren();
-    grid.classList.remove('sticker-grid');
+    grid.classList.remove('sticker-grid', 'gif-mode');
     if (emojiTab === 'stickers') { stickers.renderGrid(grid); return; }
+    if (emojiTab === 'gif') { gif.render(grid); return; }
     const list = emojiTab === 'recent' ? recentEmojis : EMOJI[emojiTab].split(' ');
     if (!list.length) grid.appendChild(el('div', 'muted', 'Noch keine Emojis benutzt.'));
     list.forEach((e) => {
@@ -2182,6 +2646,64 @@
     recentEmojis = [e, ...recentEmojis.filter((x) => x !== e)].slice(0, 32);
     store.save('recentEmojis', recentEmojis);
   }
+
+  // ---- GIF-Suche (GIPHY) ----
+  // Suchbegriffe und das Laden der Vorschaubilder gehen an GIPHY. Abschaltbar unter Einstellungen → Chats.
+  const gif = (() => {
+    let q = '', timer = null, seq = 0;
+    const enabled = () => !!GIPHY_KEY && settings.gifSearch !== false;
+    function render(grid) {
+      grid.classList.add('gif-mode');
+      const input = el('input', 'gif-search');
+      input.placeholder = 'GIFs suchen';
+      input.maxLength = 50;
+      input.value = q;
+      input.autocomplete = 'off';
+      const res = el('div', 'gif-results');
+      grid.append(input, res, el('div', 'gif-credit', 'Powered by GIPHY'));
+      input.oninput = () => { q = input.value; clearTimeout(timer); timer = setTimeout(() => load(res), 400); };
+      load(res);
+      if (!window.matchMedia('(pointer: coarse)').matches) setTimeout(() => input.focus(), 0);
+    }
+    async function load(res) {
+      const my = ++seq;
+      res.replaceChildren(el('div', 'muted gif-note', 'Lädt…'));
+      try {
+        const term = q.trim();
+        const u = new URL(`https://api.giphy.com/v1/gifs/${term ? 'search' : 'trending'}`);
+        u.searchParams.set('api_key', GIPHY_KEY);
+        if (term) { u.searchParams.set('q', term); u.searchParams.set('lang', 'de'); }
+        u.searchParams.set('limit', '24');
+        u.searchParams.set('rating', 'pg');
+        const r = await fetch(u.href);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        if (my !== seq) return;
+        res.replaceChildren();
+        const items = Array.isArray(d && d.data) ? d.data : [];
+        const okUrl = (s) => typeof s === 'string' && /^https:\/\/[a-z0-9.-]*\.giphy\.com\//i.test(s);
+        items.forEach((it) => {
+          const im = it.images || {};
+          const prev = (im.fixed_width_small || im.fixed_width || {}).url;
+          const full = (im.downsized_medium || im.downsized || im.original || {}).url;
+          if (!okUrl(prev) || !okUrl(full)) return;
+          const b = el('button', 'gif-item');
+          b.type = 'button';
+          b.title = clean(it.title, 80) || 'GIF';
+          const img = document.createElement('img');
+          img.src = prev; img.alt = b.title; img.loading = 'lazy';
+          b.appendChild(img);
+          b.onclick = () => { hideEmoji(); sendImageFromUrl(full); };
+          res.appendChild(b);
+        });
+        if (!res.children.length) res.appendChild(el('div', 'muted gif-note', 'Keine GIFs gefunden.'));
+      } catch (e) {
+        console.warn('GIF-Suche:', e);
+        if (my === seq) res.replaceChildren(el('div', 'muted gif-note', 'GIFs konnten nicht geladen werden.'));
+      }
+    }
+    return { enabled, render };
+  })();
 
   function hideEmoji() { $('emojiPanel').classList.add('hidden'); $('emojiBtn').classList.remove('active'); }
   $('emojiBtn').onclick = () => {
@@ -2271,6 +2793,12 @@
     $('setLogin').checked = settings.openAtLogin;
     $('setRelay').checked = settings.relay !== false;
     $('setLeaderboard').checked = settings.leaderboard !== false;
+    $('setTyping').checked = settings.typing !== false;
+    $('setGif').checked = settings.gifSearch !== false;
+    $('gifRow').classList.toggle('hidden', !GIPHY_KEY);
+    db.encrypted().then((on) => {
+      $('encStatus').textContent = on ? '🔒 Verschlüsselt' : document.documentElement.classList.contains('is-web') ? 'Nicht verschlüsselt (Browser)' : 'Nicht verschlüsselt';
+    });
     relay.renderRelayStatus();
     renderNotifyRows();
     $('setAutoUpdate').checked = settings.autoUpdate;
@@ -2428,6 +2956,12 @@
     relay.reportSeen();
     toast(e.target.checked ? '📊 Du erscheinst in den Ranglisten' : '🙈 Du bist in den Ranglisten ausgeblendet');
   };
+  $('setTyping').onchange = (e) => {
+    settings.typing = e.target.checked; saveSettings();
+    if (!settings.typing && activeChat) stopTyping(activeChat);
+  };
+  $('setGif').onchange = (e) => { settings.gifSearch = e.target.checked; saveSettings(); };
+  $('backupBtn').onclick = () => backup.openCreate();
   $('setRelay').onchange = (e) => {
     settings.relay = e.target.checked; saveSettings();
     if (settings.relay) relay.start(); else relay.renderRelayStatus();
@@ -2527,6 +3061,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if ($('msgMenuBack')) closeMsgMenu();
+    else if (chatSearch && view === 'viewChat' && $('modal').classList.contains('hidden')) closeChatSearch();
     else if (music.isOpen()) music.closePicker();
     else if (reels.sheetOpen()) reels.closeSheet();
     else if (video.open()) video.close();
@@ -2598,7 +3133,19 @@
   };
 
   $('attachBtn').onclick = () => $('fileInput').click();
-  $('fileInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; sendImageFile(f); };
+  // Bilder/GIFs wie bisher, alles andere als Datei
+  const sendAny = (f) => { if (!f) return; if (/^image\/(png|jpeg|gif|webp|bmp|avif)$/.test(f.type)) sendImageFile(f); else sendFile(f); };
+  $('fileInput').onchange = (e) => { const f = e.target.files[0]; e.target.value = ''; sendAny(f); };
+  $('msgInput').addEventListener('input', onComposerInput);
+  // Suche im Chat und in der Chatliste
+  $('searchBtn').onclick = () => (chatSearch ? closeChatSearch() : openChatSearch());
+  $('chatSearchIn').addEventListener('input', runChatSearch);
+  $('chatSearchIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); stepHit(e.shiftKey ? 1 : -1); } });
+  $('chatSearchUp').onclick = () => stepHit(-1);
+  $('chatSearchDown').onclick = () => stepHit(1);
+  $('chatSearchClose').onclick = closeChatSearch;
+  $('listSearch').addEventListener('input', () => renderList());
+  $('listSearch').addEventListener('keydown', (e) => { if (e.key === 'Escape') { $('listSearch').value = ''; renderList(); } });
   // Bilder/GIFs aus der Zwischenablage, dem Windows-Emoji-Feld (Win + .) oder per Drag & Drop.
   // Das Emoji-Feld liefert GIFs oft nur als <img src="https://…"> statt als Datei.
   function pickImage(dt) {
@@ -2642,7 +3189,12 @@
     if (p.file) sendImageFile(p.file); else sendImageFromUrl(p.url);
     return true;
   }
-  $('msgInput').addEventListener('paste', (e) => handleImageTransfer(e.clipboardData, e));
+  $('msgInput').addEventListener('paste', (e) => {
+    if (handleImageTransfer(e.clipboardData, e)) return;
+    // Andere Dateien aus der Zwischenablage (z. B. im Explorer kopiert) als Datei senden
+    const f = [...((e.clipboardData && e.clipboardData.files) || [])][0];
+    if (f) { e.preventDefault(); sendFile(f); }
+  });
   $('msgInput').addEventListener('beforeinput', (e) => {
     if (e.dataTransfer && /^insertFrom/.test(e.inputType)) handleImageTransfer(e.dataTransfer, e);
   });
@@ -2657,7 +3209,9 @@
     e.preventDefault();
     dragDepth = 0;
     $('dropHint').classList.add('hidden');
-    if (!handleImageTransfer(e.dataTransfer, null)) toast('⚠️ Nur Bilder und GIFs');
+    if (handleImageTransfer(e.dataTransfer, null)) return;
+    const f = [...((e.dataTransfer && e.dataTransfer.files) || [])][0];
+    if (f) sendFile(f); else toast('⚠️ Das lässt sich nicht senden');
   });
   // Dateien außerhalb des Chats nicht im Fenster öffnen
   window.addEventListener('dragover', (e) => e.preventDefault());
@@ -5718,14 +6272,64 @@
     const cat = (...p) => { const o = new Uint8Array(p.reduce((n, x) => n + x.length, 0)); let i = 0; p.forEach((x) => { o.set(x, i); i += x.length; }); return o; };
     const pubJwk = (k) => (k && k.kty === 'EC' && k.crv === 'P-256' && typeof k.x === 'string' && typeof k.y === 'string' && !k.d ? { kty: 'EC', crv: 'P-256', x: k.x, y: k.y } : null);
 
-    async function newIdentity() {
-      const s = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
-      const e = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+    // exportable = Schlüssel dürfen in ein (passwortgeschütztes) Backup
+    async function newIdentity(exportable = false) {
+      const s = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, !!exportable, ['sign', 'verify']);
+      const e = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, !!exportable, ['deriveBits']);
       return {
         signPriv: s.privateKey, encPriv: e.privateKey,
         signPub: pubJwk(await crypto.subtle.exportKey('jwk', s.publicKey)),
         encPub: pubJwk(await crypto.subtle.exportKey('jwk', e.publicKey)),
+        ...(exportable ? { exportable: true } : {}),
       };
+    }
+    // Vorheriger Schlüssel (nach dem Wechsel für ein Backup): Nachrichten, die Freunde noch an
+    // den alten Schlüssel geschickt haben, lassen sich damit weiter öffnen.
+    let oldIdent;
+    const oldKeys = async () => {
+      if (oldIdent === undefined) oldIdent = (await db.get('keys', 'identityOld').catch(() => null)) || null;
+      return oldIdent;
+    };
+    // Kontakt-Schlüssel setzen und merken, wenn sie sich geändert haben (Sicherheitsnummer)
+    function setContactKeys(code, keys) {
+      const c = contacts[code];
+      if (!c) return;
+      const old = c.keys;
+      c.keys = keys;
+      if (old && old.sign && (old.sign.x !== keys.sign.x || old.sign.y !== keys.sign.y)) keysChanged(code);
+    }
+
+    // Backup: eigene Schlüssel exportieren. Ältere Schlüssel sind nicht exportierbar – dann einmalig
+    // neue erzeugen und beim Server umstellen (wie beim Konto-Umzug, nur auf demselben Gerät).
+    async function backupKeys() {
+      if (!ready || !enabled() || !ident) return null;
+      if (!ident.exportable) {
+        const k = await newIdentity(true);
+        const r = await rotationRequest(me.code, k);
+        const sig = await sign(rotateText(me.code, r.ts, r.sign, r.enc));
+        await post(`/v1/rotate/${me.code}`, { sign: r.sign, enc: r.enc, ts: r.ts, sig, sigNew: r.sigNew });
+        await db.put('keys', 'identityOld', ident);
+        await db.put('keys', 'identity', k);
+        oldIdent = ident;
+        ident = k;
+        broadcastProfile(); // Freunde bekommen die neuen Schlüssel
+        setupPush();        // der Server hat beim Umstellen die Push-Anmeldung gelöscht
+      }
+      return {
+        signPriv: await crypto.subtle.exportKey('jwk', ident.signPriv),
+        encPriv: await crypto.subtle.exportKey('jwk', ident.encPriv),
+        signPub: ident.signPub, encPub: ident.encPub,
+      };
+    }
+    // Wiederherstellen: Schlüssel aus dem Backup einlesen (null = ungültig)
+    async function importBackupKeys(k) {
+      try {
+        const signPub = pubJwk(k && k.signPub), encPub = pubJwk(k && k.encPub);
+        if (!signPub || !encPub || !k.signPriv || !k.encPriv) return null;
+        const signPriv = await crypto.subtle.importKey('jwk', k.signPriv, { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+        const encPriv = await crypto.subtle.importKey('jwk', k.encPriv, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+        return { signPriv, encPriv, signPub, encPub, exportable: true };
+      } catch (e) { console.warn('Backup-Schlüssel:', e); return null; }
     }
     async function loadKeys() {
       let k = await db.get('keys', 'identity').catch(() => null);
@@ -5794,7 +6398,7 @@
       const keys = { sign: pubJwk(k.sign), enc: pubJwk(k.enc) };
       if (!keys.sign || !keys.enc) return null;
       known[code] = true;
-      if (c) { c.keys = keys; saveMeta(); }
+      if (c) { setContactKeys(code, keys); saveMeta(); }
       return keys;
     }
 
@@ -5829,8 +6433,17 @@
         if (!(await ok(cur))) return null; // gefälscht
       }
       const theirs = await crypto.subtle.importKey('raw', epk, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
-      const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: theirs }, ident.encPriv, 256);
-      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, await aesFrom(shared, epk), ct);
+      const decryptWith = async (priv) => {
+        const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: theirs }, priv, 256);
+        return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, await aesFrom(shared, epk), ct);
+      };
+      let pt;
+      try { pt = await decryptWith(ident.encPriv); }
+      catch (e) {
+        const o = await oldKeys(); // an den vorherigen Schlüssel verschickt?
+        if (!o) throw e;
+        pt = await decryptWith(o.encPriv);
+      }
       return JSON.parse(td.decode(pt));
     }
 
@@ -6006,18 +6619,18 @@
 
     return {
       start, poll, send, setupPush, pushTest, saveNames, renderRelayStatus, reportAchievements, achStats, reportSeen, adminUsers, isAdmin,
-      newIdentity, rotationRequest, rotate, serverHasKey, enabled, url,
+      newIdentity, rotationRequest, rotate, serverHasKey, enabled, url, backupKeys, importBackupKeys,
       canSend: (code) => ready && enabled() && known[code] !== false,
       ready: () => ready && enabled(),
       // Für UpReels: Text mit dem eigenen Schlüssel unterschreiben (nur wenn der Briefkasten aktiv ist)
       signText: async (text) => { if (!ready || !ident) throw new Error('not ready'); return sign(text); },
       publicKeys: () => (ident ? { sign: ident.signPub, enc: ident.encPub } : null),
+      keysExportable: () => !!(ident && ident.exportable),
       // Direkt (per Verbindung) erhaltene Schlüssel merken
       pinKeys(code, k) {
         const keys = k && { sign: pubJwk(k.sign), enc: pubJwk(k.enc) };
         if (!keys || !keys.sign || !keys.enc) return;
-        const c = contacts[code];
-        if (c) { c.keys = keys; known[code] = true; }
+        if (contacts[code]) { setContactKeys(code, keys); known[code] = true; }
       },
     };
   })();
@@ -6409,10 +7022,169 @@
     return { incoming };
   })();
 
+  // ================= Backup (Datei mit Passwort) =================
+  // Enthält Profil, Freunde, Gruppen, Einstellungen, alle Chats mit Bildern/Dateien und die Schlüssel
+  // für den Briefkasten. Alles ist mit dem Passwort verschlüsselt (PBKDF2 + AES-256-GCM).
+  // Wiederherstellen geht beim Einrichten („Backup wiederherstellen“), z. B. nach einem PC-Wechsel.
+  const backup = (() => {
+    const LS_PREFIX = 'chatbox.';
+    const LS_KEY_RE = /^[A-Za-z]{1,40}$/;
+    const SKIP_LS = new Set(['movedNotice', 'encDone']);
+    let pendingFile = null;
+
+    function openCreate() {
+      openModal((box) => {
+        box.appendChild(el('h3', '', '💾 Backup erstellen'));
+        box.appendChild(el('p', 'muted', 'Das Backup enthält dein Profil, deine Freunde und Gruppen, alle Chats mit Bildern und Dateien sowie deinen Schlüssel für die Offline-Zustellung. Es wird mit deinem Passwort verschlüsselt. Ohne das Passwort kann es niemand öffnen, auch du nicht.'));
+        const pw = el('input'); pw.type = 'password'; pw.placeholder = 'Passwort (mind. 8 Zeichen)'; pw.autocomplete = 'new-password';
+        const pw2 = el('input'); pw2.type = 'password'; pw2.placeholder = 'Passwort wiederholen'; pw2.autocomplete = 'new-password';
+        box.append(pw, pw2);
+        if (relay.ready() && !relay.keysExportable()) {
+          box.appendChild(el('p', 'muted', 'Beim ersten Backup bekommt dein Konto einen neuen Schlüssel. Deine Freunde sehen deshalb einmalig den Hinweis, dass sich deine Sicherheitsnummer geändert hat.'));
+        }
+        const err = el('div', 'status err');
+        box.appendChild(err);
+        const actions = buttons(['Abbrechen', 'ghost', closeModal], ['Backup speichern', 'primary', async () => {
+          if (pw.value.length < 8) { err.textContent = 'Das Passwort braucht mindestens 8 Zeichen.'; pw.focus(); return; }
+          if (pw.value !== pw2.value) { err.textContent = 'Die Passwörter stimmen nicht überein.'; pw2.focus(); return; }
+          const btn = actions.querySelector('.primary');
+          btn.disabled = true;
+          err.classList.remove('err');
+          try {
+            await create(pw.value, (t) => { err.textContent = t; });
+            closeModal();
+            toast('💾 Backup gespeichert');
+          } catch (e) {
+            console.error('Backup:', e);
+            err.classList.add('err');
+            err.textContent = 'Das Backup ist fehlgeschlagen: ' + (e.message || e);
+            btn.disabled = false;
+          }
+        }]);
+        box.appendChild(actions);
+        setTimeout(() => pw.focus(), 0);
+      });
+    }
+
+    async function create(password, progress) {
+      progress('Schlüssel werden vorbereitet…');
+      const keys = await relay.backupKeys().catch((e) => { console.warn('Backup-Schlüssel:', e); return null; });
+      saveMeta();
+      const ls = {};
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(LS_PREFIX) && !SKIP_LS.has(k.slice(LS_PREFIX.length))) ls[k.slice(LS_PREFIX.length)] = localStorage.getItem(k);
+      }
+      progress('Bilder und Dateien werden gesammelt…');
+      const media = {};
+      const mediaIds = await db.keys('media');
+      for (const id of mediaIds) {
+        const v = await db.get('media', id).catch(() => null);
+        if (typeof v === 'string') media[id] = v;
+      }
+      progress('Wird verschlüsselt…');
+      const payload = { v: 1, created: Date.now(), code: me.code, ls, chats, media, keys };
+      const text = await LIB.encryptBackup(payload, password);
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/octet-stream' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `WhatsUp-Backup-${me.code}-${new Date().toISOString().slice(0, 10)}.whatsup`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      if (!keys) toast('Hinweis: Ohne aktive Offline-Zustellung ist der Briefkasten-Schlüssel nicht im Backup.');
+    }
+
+    // ---- Wiederherstellen (nur beim Einrichten, wenn hier noch kein Konto ist) ----
+    function pick() { $('backupInput').click(); }
+    $('backupInput').onchange = async (e) => {
+      const f = e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      if (f.size > 1.5 * 1024 * 1024 * 1024) { toast('⚠️ Die Datei ist zu groß.'); return; }
+      pendingFile = await f.text().catch(() => null);
+      if (!pendingFile) { toast('⚠️ Die Datei konnte nicht gelesen werden.'); return; }
+      askPassword('');
+    };
+    function askPassword(msg) {
+      openModal((box) => {
+        box.appendChild(el('h3', '', '💾 Backup wiederherstellen'));
+        box.appendChild(el('p', 'muted', 'Gib das Passwort ein, mit dem du das Backup erstellt hast.'));
+        const pw = el('input'); pw.type = 'password'; pw.placeholder = 'Passwort'; pw.autocomplete = 'current-password';
+        box.appendChild(pw);
+        const err = el('div', 'status err', msg);
+        box.appendChild(err);
+        const go = async () => {
+          err.classList.remove('err');
+          err.textContent = 'Wird entschlüsselt…';
+          let data;
+          try { data = await LIB.decryptBackup(pendingFile, pw.value); }
+          catch (e2) {
+            if (e2.message === 'password') { askPassword('Falsches Passwort oder beschädigte Datei.'); return; }
+            pendingFile = null;
+            closeModal();
+            toast('⚠️ Das ist keine WhatsUp-Backupdatei.');
+            return;
+          }
+          confirmRestore(data);
+        };
+        pw.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
+        box.appendChild(buttons(['Abbrechen', 'ghost', () => { pendingFile = null; closeModal(); }], ['Weiter', 'primary', go]));
+        setTimeout(() => pw.focus(), 0);
+      });
+    }
+    function confirmRestore(data) {
+      let acct = null;
+      try { acct = JSON.parse((data && data.ls && data.ls.me) || 'null'); } catch {}
+      if (!data || data.v !== 1 || !acct || !CODE_RE.test(String(acct.code)) || acct.code !== data.code) {
+        pendingFile = null; closeModal(); toast('⚠️ Das Backup ist unvollständig.'); return;
+      }
+      const nChats = Object.values(data.chats || {}).filter((l) => Array.isArray(l) && l.some((m) => !m.sys)).length;
+      openModal((box) => {
+        box.appendChild(el('h3', '', '💾 Backup wiederherstellen'));
+        box.appendChild(el('p', '', `Konto „${clean(acct.name, 24)}“ (Code ${acct.code}) mit ${nChats} ${nChats === 1 ? 'Chat' : 'Chats'} vom ${new Date(Number(data.created) || 0).toLocaleDateString('de-DE')}.`));
+        box.appendChild(el('p', 'muted', 'Stell ein Backup nur wieder her, wenn dein Konto auf keinem anderen Gerät mehr läuft. Läuft es dort noch, nimm stattdessen „Ich habe schon ein Konto“. Nachrichten, die nach dem Backup kamen, fehlen, außer sie warten noch im Briefkasten.'));
+        if (!data.keys) box.appendChild(el('p', 'muted', '⚠️ In diesem Backup ist kein Briefkasten-Schlüssel. Die Offline-Zustellung funktioniert danach für dieses Konto nicht mehr.'));
+        box.appendChild(buttons(['Abbrechen', 'ghost', () => { pendingFile = null; closeModal(); }], ['Wiederherstellen', 'primary', () => restore(data, box)]));
+      });
+    }
+    async function restore(data, box) {
+      box.querySelectorAll('button').forEach((b) => { b.disabled = true; });
+      box.appendChild(el('p', 'muted', 'Wird wiederhergestellt…'));
+      try {
+        const ident = data.keys ? await relay.importBackupKeys(data.keys) : null;
+        await db.destroy();
+        for (const [k, v] of Object.entries(data.ls || {})) {
+          if (LS_KEY_RE.test(k) && typeof v === 'string' && !SKIP_LS.has(k)) localStorage.setItem(LS_PREFIX + k, v);
+        }
+        localStorage.removeItem(LS_PREFIX + 'movedNotice');
+        for (const [id, list] of Object.entries(data.chats || {})) {
+          if (/^[ug]:[A-Za-z0-9-]{1,40}$/.test(id) && Array.isArray(list)) await db.put('chats', id, list);
+        }
+        for (const [k, v] of Object.entries(data.media || {})) {
+          if (typeof k === 'string' && k.length <= 120 && typeof v === 'string') await db.put('media', k, v);
+        }
+        if (ident) await db.put('keys', 'identity', ident);
+        pendingFile = null;
+        window.chatboxWindow.reload();
+      } catch (e) {
+        console.error('Wiederherstellen:', e);
+        box.appendChild(el('p', 'status err', 'Fehlgeschlagen: ' + (e.message || e)));
+      }
+    }
+    $('setupRestore').onclick = pick;
+
+    return { openCreate };
+  })();
+
   // ================= Start =================
   async function boot() {
     if (!me.pv) { me.pv = Date.now(); saveMeta(); } // Freunde holen sich so einmal das aktuelle Profil
     await loadData();
+    pruneExpired();
+    setInterval(pruneExpired, 60 * 1000);
+    setTimeout(migrateEncryption, 8000);
     show('viewList');
     stories.prune();
     setInterval(() => stories.prune(), 5 * 60 * 1000);

@@ -84,6 +84,8 @@
       if (pendingChat) { const c = pendingChat; pendingChat = null; if (clickHandler) clickHandler(c); }
     },
     onHidden: noop,
+    // Im Browser gibt es keinen vom Betriebssystem geschützten Schlüssel: Verlauf bleibt unverschlüsselt
+    storageKey: () => Promise.resolve(null),
   };
 
   // Updates kommen in der Web-Version automatisch beim nächsten Öffnen

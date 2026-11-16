@@ -67,6 +67,14 @@ Mit **Test senden** kommt nach 5 Sekunden ein echter Test-Push über den Server.
 | ⚡ **Echtzeit-Chat** | Nachrichten gehen direkt von PC zu PC (Peer-to-Peer) |
 | 👥 **Gruppenchats** | Gruppen erstellen, Freunde hinzufügen, umbenennen, verlassen. Mit Gruppenbild und Beschreibung |
 | 📷 **Bilder & GIFs** | Über 📎, mit Strg+V, per Drag & Drop oder aus dem Windows-Emoji-Feld (Win + .). GIFs bis 25 MB, Bilder werden automatisch verkleinert |
+| 📄 **Dateien** | PDFs, Word, ZIP und alles andere bis 25 MB über 📎, Strg+V oder Drag & Drop. Bei Programmdateien (.exe, .bat …) warnt WhatsUp vor dem Speichern |
+| 🎞️ **GIF-Suche** | GIFs von GIPHY direkt im Emoji-Feld suchen (Reiter „GIF“, braucht einen GIPHY-API-Schlüssel, siehe „Selbst bauen“ weiter unten) |
+| ✍️ **„schreibt…“** | Du siehst, wenn jemand gerade tippt, im Chat und in der Chatliste. In den Einstellungen abschaltbar |
+| ↪️ **Weiterleiten** | Nachrichten, Bilder und Dateien an einen oder mehrere Chats weiterleiten (Rechtsklick bzw. gedrückt halten) |
+| 🔍 **Suche** | Über der Chatliste alle Chats und Nachrichten durchsuchen, mit der Lupe im Chat nur diesen Chat. Groß/klein und Akzente egal |
+| ⏱ **Verschwindende Nachrichten** | Pro Chat einschaltbar: Neue Nachrichten verschwinden nach 24 Stunden, 7 oder 90 Tagen, bei allen im Chat |
+| 💾 **Backup** | Profil, Freunde, Chats, Bilder und Dateien als passwortgeschützte Datei sichern und beim Einrichten wiederherstellen |
+| 🔐 **Sicherheitsnummer** | Wie bei Signal: 60 Ziffern mit einem Freund vergleichen, um sicherzugehen, dass niemand dazwischensitzt |
 | 🧹 **Chat leeren** | Verlauf eines Chats löschen und Speicher freigeben. Übersicht aller Chats nach Größe in den Einstellungen |
 | 🌅 **Status** | Wie bei WhatsApp: ein oder mehrere Bilder mit Beschreibung teilen, 24 Stunden sichtbar. Ansehen als Slides (tippen, wischen, gedrückt halten = Pause), Reaktionen mit Emojis, „Angesehen von“ für deine eigenen Status |
 | 🎤 **Sprachnachrichten** | Mikrofon-Knopf im Chat (erscheint, wenn das Eingabefeld leer ist). Aufnahme mit Live-Pegel, verwerfen oder senden. Abspielen mit Wellenform, Vorspulen per Tippen und 1×/1,5×/2× Tempo. Funktioniert zwischen Windows, iPhone und Browser |
@@ -88,9 +96,9 @@ Mit **Test senden** kommt nach 5 Sekunden ein echter Test-Push über den Server.
 | 🌓 **Minimalistisch** | Schlichtes Design, hell oder dunkel passend zu Windows |
 | 🟢 **Online-Status** | Du siehst, wer gerade online ist |
 | 🔔 **Benachrichtigungen** | Desktop-Meldung und blinkende Taskleiste bei neuen Nachrichten |
-| ✓✓ **Zustellstatus** | 🕓 wartet · ✓ gesendet · ✓✓ angekommen |
+| ✓✓ **Zustellstatus** | 🕓 wartet · ✓ gesendet · ✓✓ angekommen · blaue ✓✓ gelesen. „Info“ zeigt, wer wann gelesen hat |
 | 📬 **Warteschlange** | Nachrichten an Offline-Freunde werden automatisch zugestellt, sobald ihr beide online seid |
-| 💾 **Lokaler Verlauf** | Chats bleiben nur auf deinem PC gespeichert |
+| 💾 **Lokaler Verlauf** | Chats bleiben nur auf deinem Gerät gespeichert, in der Windows-App verschlüsselt |
 
 ## 🚀 So benutzt du WhatsUp
 
@@ -117,6 +125,18 @@ Gut zu wissen:
 - Gib den Bestätigungscode **niemals** an jemand anderen weiter. Wer ihn hat, übernimmt dein Konto.
 - Nach 3 falschen Codes oder bei „Das war ich nicht“ sind Anmeldungen 10 Minuten gesperrt. Der Code gilt 5 Minuten.
 
+## 💾 Backup
+
+Ist dein altes Gerät kaputt oder weg, hilft ein Backup:
+
+1. **Erstellen:** Einstellungen („Du“) → **Backup** → **Erstellen**. Passwort ausdenken (mind. 8 Zeichen) und die `.whatsup`-Datei gut aufheben.
+2. **Wiederherstellen:** Auf dem neuen Gerät beim Einrichten **„Backup wiederherstellen“** wählen, Datei auswählen und Passwort eingeben.
+
+Gut zu wissen:
+- Das Backup ist mit deinem Passwort verschlüsselt (PBKDF2 + AES-256-GCM). **Ohne das Passwort kann es niemand öffnen, auch du nicht.**
+- Es enthält auch den Schlüssel für die Offline-Zustellung. Beim ersten Backup bekommt dein Konto deshalb einen neuen Schlüssel, und deine Freunde sehen einmalig, dass sich deine Sicherheitsnummer geändert hat.
+- Läuft dein Konto noch auf einem anderen Gerät, nimm stattdessen „Ich habe schon ein Konto“ (siehe oben). Ein Konto kann nur auf einem Gerät gleichzeitig laufen.
+
 ## 📬 Offline-Zustellung
 
 Sind beide online, gehen Nachrichten wie bisher **direkt von Gerät zu Gerät**.
@@ -133,7 +153,9 @@ Ist dein Freund offline, landet die Nachricht **Ende-zu-Ende-verschlüsselt** in
 - **Verschlüsselter Briefkasten:** Für die Offline-Zustellung hat jedes Gerät eigene Schlüssel (P-256), die das Gerät nie verlassen. Jede Nachricht wird mit einem Einmal-Schlüssel und AES-256-GCM verschlüsselt und vom Absender signiert. Der Server kann Nachrichten weder lesen noch fälschen, und nur der Besitzer des Codes kann seinen Briefkasten abholen.
 - **Signalisierung:** Der öffentliche [PeerJS](https://peerjs.com)-Server hilft nur beim *Verbindungsaufbau*. Deine Nachrichten bekommt er nie zu sehen.
 - **Keine Konten, kein Tracking:** Es gibt keine Telemetrie und keine Werbung. Deine Kontakte bekommen nur Name, Status, Profilbild und die Anzahl deiner Erfolge.
-- **Geprüfte Daten:** Empfangene Bilder werden nur als PNG, JPEG, GIF oder WebP angenommen und in der Größe begrenzt. Texte werden nie als HTML dargestellt.
+- **Sicherheitsnummer:** In der Chat-Info (oben auf den Namen tippen) lässt sich wie bei Signal eine 60-stellige Nummer mit dem Freund vergleichen. Ändert sich der Schlüssel (neues Gerät, Backup), steht ein Hinweis im Chat.
+- **Verschlüsselter Verlauf (Windows):** Chats, Bilder und Dateien liegen verschlüsselt (AES-256-GCM) auf der Festplatte. Der Schlüssel ist mit Windows (DPAPI) an deinen Windows-Benutzer gebunden. In der Web-Version gibt es keinen solchen geschützten Speicher, dort bleibt der Verlauf unverschlüsselt im Browser.
+- **Geprüfte Daten:** Empfangene Bilder werden nur als PNG, JPEG, GIF oder WebP angenommen und in der Größe begrenzt. Dateien werden immer als neutrale Daten gespeichert und nie in der App geöffnet. Texte werden nie als HTML dargestellt.
 - **Entfernen sperrt:** Wenn du einen Freund entfernst, kann dieser Code dich nicht mehr erreichen, bis du ihn selbst wieder addest.
 - **Gehärtete App:** Context Isolation, Sandbox, keine Node.js-Rechte im Fenster, eine strenge Content Security Policy, gesperrte Navigation, und alle Berechtigungen außer Benachrichtigungen werden abgelehnt.
 - **Sichere Updates:** Updates kommen nur aus den offiziellen Releases dieses Repos über HTTPS. Vor der Installation wird die SHA-512-Prüfsumme geprüft.
@@ -142,7 +164,9 @@ Ist dein Freund offline, landet die Nachricht **Ende-zu-Ende-verschlüsselt** in
 Wichtig zu wissen:
 - Wer deinen Code kennt, kann dich adden. Gib ihn also nur Leuten, mit denen du chatten willst.
 - Bei einer direkten Verbindung sieht dein Chatpartner deine IP-Adresse. Das ist bei jeder Peer-to-Peer-Verbindung so.
-- Der Chatverlauf (inklusive Bilder) liegt unverschlüsselt in deinem Windows-Benutzerprofil (`%APPDATA%\Chatbox`).
+- Der Chatverlauf liegt in deinem Windows-Benutzerprofil (`%APPDATA%\Chatbox`). Nachrichten, Bilder und Dateien sind verschlüsselt, Profil, Freundesliste und Einstellungen nicht. Wer an deinem angemeldeten Windows-Konto sitzt, kann WhatsUp öffnen und alles lesen.
+- „schreibt…“ geht nur direkt an verbundene Chatpartner, nie über einen Server. Die GIF-Suche schickt deine Suchbegriffe an GIPHY und lädt die Vorschaubilder von dort.
+- Verschwindende Nachrichten verschwinden nur bei Geräten mit WhatsUp ab Version 1.29. Screenshots oder Weiterleiten können sie trotzdem festhalten.
 - In Gruppen verbinden sich alle Mitglieder direkt miteinander. Damit sehen auch Gruppenmitglieder, die du nicht geaddet hast, deine IP-Adresse.
 - Der Briefkasten-Server sieht keine Inhalte, aber **Metadaten**: welcher Code wann wie große Nachrichten an welchen Code schickt, sowie IP-Adressen.
 
@@ -167,11 +191,14 @@ git clone https://github.com/Jeremy-Jud/whatsup.git
 cd whatsup
 npm install
 npm start          # App im Entwicklermodus starten
+npm test           # Tests ausführen (tests/)
 npm run dist       # WhatsUp.exe in den Ordner dist/ bauen
 npm run build:web  # Web-Version (iPhone/iPad) in den Ordner dist-web/ bauen
 ```
 
 Die Web-Version wird bei jedem Push auf `main` automatisch auf GitHub Pages veröffentlicht (`.github/workflows/web.yml`).
+
+**GIF-Suche einschalten:** Unter [developers.giphy.com](https://developers.giphy.com) kostenlos einen API-Schlüssel erstellen und in `src/app.js` bei `const GIPHY_KEY = '';` eintragen. Ohne Schlüssel ist der GIF-Reiter ausgeblendet.
 
 > Unter Windows PowerShell funktioniert `npm` manchmal nicht, weil die Skriptausführung gesperrt ist. Nimm dann `npm.cmd install` und `npm.cmd start`.
 
@@ -185,8 +212,10 @@ whatsup/
     ├── index.html   # Oberfläche
     ├── style.css    # Design
     ├── app.js       # Chat-Logik (PeerJS, Freunde, Gruppen, Bilder, Profil)
+    ├── lib.js       # Reine Hilfsfunktionen (Suche, Dateien, Timer, Sicherheitsnummer, Verschlüsselung), getestet
     ├── emojis.js    # Emoji-Auswahl
     └── achievements.js  # Liste der Erfolge
+tests/               # Tests für src/lib.js (npm test)
 web/                 # Nur Web-Version: Ersatz für preload.js, iPhone-Design, Manifest, Icons
 scripts/build-web.js # Baut die Web-Version aus src/ + web/
 relay/               # Briefkasten-Server (Cloudflare Worker): npm install && npx wrangler deploy
@@ -198,10 +227,22 @@ relay/               # Briefkasten-Server (Cloudflare Worker): npm install && np
 - [x] Bilder & GIFs senden
 - [x] Emoji-Auswahl
 - [x] Erfolge & Profilbilder
-- [ ] GIF-Suche
-- [ ] Reaktionen auf Nachrichten
-- [ ] Dateien senden
-- [ ] Verschlüsselter lokaler Verlauf
+- [x] Reaktionen, Antworten und Löschen für alle
+- [x] Sprachnachrichten, Sprach- und Videoanrufe
+- [x] Status, UpReels, Umfragen, Ranglisten und Wochen-Challenges
+- [x] Lesebestätigungen
+- [x] GIF-Suche
+- [x] Dateien senden
+- [x] „schreibt…“-Anzeige
+- [x] Weiterleiten
+- [x] Suche in Chats
+- [x] Verschwindende Nachrichten
+- [x] Backup & Wiederherstellen
+- [x] Sicherheitsnummer
+- [x] Verschlüsselter lokaler Verlauf (Windows)
+- [ ] Mehrere Geräte gleichzeitig (z. B. PC und iPhone mit demselben Code)
+- [ ] Gruppenanrufe
+- [ ] Bildschirm teilen in Anrufen
 - [ ] macOS- und Linux-Version
 
 ## 📄 Lizenz

@@ -1,4 +1,5 @@
-const { app, BrowserWindow, ipcMain, shell, net, nativeTheme, Notification, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, net, nativeTheme, Notification, Tray, Menu, nativeImage, safeStorage } = require('electron');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 
@@ -438,6 +439,24 @@ ipcMain.on('update:install', () => {
 });
 
 ipcMain.on('open:repo', () => shell.openExternal(`https://github.com/${REPO}`));
+
+// Schlüssel für den verschlüsselten Chatverlauf. Er liegt mit Windows-DPAPI geschützt in
+// %APPDATA%\…\storage-key.bin und lässt sich nur unter diesem Windows-Benutzer entschlüsseln.
+// null = Verschlüsselung nicht verfügbar (der Verlauf bleibt dann wie bisher unverschlüsselt).
+ipcMain.handle('store:key', (e) => {
+  if (!win || e.sender !== win.webContents) return null;
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    const file = path.join(app.getPath('userData'), 'storage-key.bin');
+    if (fs.existsSync(file)) return safeStorage.decryptString(fs.readFileSync(file));
+    const key = crypto.randomBytes(32).toString('base64');
+    fs.writeFileSync(file, safeStorage.encryptString(key));
+    return key;
+  } catch (err) {
+    console.warn('Speicher-Schlüssel:', err);
+    return null;
+  }
+});
 
 // Bild/GIF von einer Adresse laden – z. B. GIFs aus dem Windows-Emoji-Feld (Win + .),
 // das statt einer Datei nur einen Bild-Link einfügt. Nur https, nur Bilder, max. 25 MB.

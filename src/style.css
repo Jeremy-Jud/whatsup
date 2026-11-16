@@ -1021,3 +1021,60 @@ button.sender:hover { background: var(--soft); }
 .group-leave:hover { text-decoration: underline; }
 /* Speichern/Schließen bleibt unten sichtbar */
 .modal-box.modal-big .sticky-actions { position: sticky; bottom: -18px; margin: auto -18px -18px; padding: 12px 18px; background: var(--bg); border-top: 1px solid var(--line); z-index: 2; }
+
+/* ---------- v1.29: Suche, schreibt…, Weiterleiten, Dateien, GIFs, Timer, Sicherheitsnummer ---------- */
+/* Suche über der Chatliste */
+.list-search { position: relative; margin: 6px 14px 0; }
+.list-search svg { position: absolute; left: 10px; top: 50%; width: 15px; height: 15px; transform: translateY(-50%); fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; pointer-events: none; }
+.list-search input { padding-left: 32px; }
+input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
+.list li.search-head { cursor: default; padding: 10px 10px 2px; font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.list li.search-head:hover { background: none; }
+.search-hit .avatar { width: 32px; height: 32px; }
+.search-date { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: 6px; }
+
+/* Suche im Chat */
+.chat-search-btn { margin-bottom: 6px; }
+.chat-search { display: flex; align-items: center; gap: 2px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); }
+.chat-search input { flex: 1; padding: 6px 10px; }
+.chat-search .muted { min-width: 34px; text-align: center; font-size: 11.5px; }
+.msg.hit { box-shadow: 0 0 0 1.5px color-mix(in srgb, #ffb547 70%, transparent); }
+.msg.hit-cur { box-shadow: 0 0 0 2.5px #ffb547; }
+
+/* „schreibt…“ */
+.flast.typing, #chatSub.typing { color: var(--accent); font-style: italic; }
+
+/* Weitergeleitet */
+.fwd { font-size: 11px; font-style: italic; opacity: .75; margin-bottom: 2px; }
+.msg.has-media .fwd, .msg.has-file .fwd, .msg.has-voice .fwd { padding: 0 6px; }
+
+/* Dateien */
+.msg.has-file { padding: 4px; }
+.msg.has-file .text { padding: 4px 6px 0; }
+.file-card { display: flex; align-items: center; gap: 10px; min-width: 200px; max-width: 260px; padding: 8px 10px; border-radius: 12px; text-align: left; background: color-mix(in srgb, var(--fg) 7%, transparent); }
+.msg.me .file-card { background: color-mix(in srgb, #000 16%, transparent); }
+.file-card:hover { filter: brightness(1.05); }
+.file-ic { font-size: 26px; line-height: 1; flex-shrink: 0; }
+.file-meta { display: flex; flex-direction: column; min-width: 0; }
+.file-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-size { font-size: 11px; opacity: .75; }
+.msg.has-file .meta { padding: 0 6px; }
+
+/* GIF-Suche im Emoji-Feld */
+.emoji-tab.gif-tab { font-size: 11px; font-weight: 700; letter-spacing: .5px; filter: none; }
+.emoji-grid.gif-mode { display: flex; flex-direction: column; gap: 6px; padding: 4px 8px 6px; }
+.gif-search { padding: 6px 10px; }
+.gif-results { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 4px; }
+.gif-item { height: 80px; border-radius: 8px; overflow: hidden; background: var(--soft); }
+.gif-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gif-item:hover { outline: 2px solid var(--accent); }
+.gif-note { grid-column: 1 / -1; padding: 10px 0; text-align: center; }
+.gif-credit { font-size: 10px; color: var(--muted); text-align: right; }
+
+/* Verschwindende Nachrichten */
+.timer-seg { margin: 6px 0 4px; }
+
+/* Sicherheitsnummer */
+.safety-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px 4px; margin: 10px 0; text-align: center; font: 600 15px Consolas, monospace; letter-spacing: 1px; user-select: text; }
+.safety-state { text-align: center; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.safety-state.ok { color: var(--online); font-weight: 600; }

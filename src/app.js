@@ -16,7 +16,7 @@
   const PROTO = 7;                        // Protokoll-Version (3 = große Dateien bis 25 MB, 4 = Sprachnachrichten, 5 = Sticker, 6 = Videos, 7 = Dateien)
   // GIF-Suche über GIPHY: kostenlosen API-Schlüssel unter https://developers.giphy.com erstellen und hier eintragen.
   // Leer = keine GIF-Suche (der GIF-Reiter im Emoji-Feld wird dann nicht angezeigt).
-  const GIPHY_KEY = '';
+  const GIPHY_KEY = '1a5n0qYKPM1xrHMbchCFIdo9Yxc5pyGw';
   const LIB = window.WHATSUP_LIB;
   const STICKER_OWNER = 'V5KGWG';         // nur dieser Nutzer hat die Sticker-Funktion
   const STICKER_MAX = 1.5 * 1024 * 1024;

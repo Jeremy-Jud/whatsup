@@ -68,7 +68,7 @@ Mit **Test senden** kommt nach 5 Sekunden ein echter Test-Push über den Server.
 | 👥 **Gruppenchats** | Gruppen erstellen, Freunde hinzufügen, umbenennen, verlassen. Mit Gruppenbild und Beschreibung |
 | 📷 **Bilder & GIFs** | Über 📎, mit Strg+V, per Drag & Drop oder aus dem Windows-Emoji-Feld (Win + .). GIFs bis 25 MB, Bilder werden automatisch verkleinert |
 | 📄 **Dateien** | PDFs, Word, ZIP und alles andere bis 25 MB über 📎, Strg+V oder Drag & Drop. Bei Programmdateien (.exe, .bat …) warnt WhatsUp vor dem Speichern |
-| 🎞️ **GIF-Suche** | GIFs von GIPHY direkt im Emoji-Feld suchen (Reiter „GIF“, braucht einen GIPHY-API-Schlüssel, siehe „Selbst bauen“ weiter unten) |
+| 🎞️ **GIF-Suche** | GIFs von GIPHY direkt im Emoji-Feld suchen (😊 → Reiter „GIF“). Suchbegriffe gehen an GIPHY, abschaltbar in den Einstellungen |
 | ✍️ **„schreibt…“** | Du siehst, wenn jemand gerade tippt, im Chat und in der Chatliste. In den Einstellungen abschaltbar |
 | ↪️ **Weiterleiten** | Nachrichten, Bilder und Dateien an einen oder mehrere Chats weiterleiten (Rechtsklick bzw. gedrückt halten) |
 | 🔍 **Suche** | Über der Chatliste alle Chats und Nachrichten durchsuchen, mit der Lupe im Chat nur diesen Chat. Groß/klein und Akzente egal |

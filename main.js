@@ -95,8 +95,10 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  // Keine Rechte (Standort …) außer Benachrichtigungen und Kamera/Mikrofon für Anrufe
+  // Keine Rechte (Standort …) außer Benachrichtigungen und Kamera/Mikrofon für Anrufe – nur für das Hauptfenster.
+  // Gilt für die ganze Sitzung, also auch für das Benachrichtigungsfenster (das bekommt nichts).
   win.webContents.session.setPermissionRequestHandler((wc, permission, cb, details) => {
+    if (!win || win.isDestroyed() || wc !== win.webContents) { cb(false); return; }
     if (permission === 'media') {
       cb(wc === win.webContents && (details.mediaTypes || []).every((t) => t === 'audio' || t === 'video'));
       return;
@@ -281,7 +283,8 @@ function ensurePopup() {
   if (TEST_MODE) popup.setIgnoreMouseEvents(true);
   popup.webContents.on('will-navigate', (e) => e.preventDefault());
   popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  popup.webContents.session.setPermissionRequestHandler((_wc, _p, cb) => cb(false));
+  // Rechte regelt der Handler des Hauptfensters (gleiche Sitzung) – das Popup bekommt keine.
+  // Ein eigener Handler hier würde den des Hauptfensters ersetzen und Anrufe blockieren.
   popup.webContents.once('did-finish-load', () => {
     popupReady = true;
     const q = popupQueue; popupQueue = [];

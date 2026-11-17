@@ -74,6 +74,11 @@ Mit **Test senden** kommt nach 5 Sekunden ein echter Test-Push über den Server.
 | 🔍 **Suche** | Über der Chatliste alle Chats und Nachrichten durchsuchen, mit der Lupe im Chat nur diesen Chat. Groß/klein und Akzente egal |
 | ⏱ **Verschwindende Nachrichten** | Pro Chat einschaltbar: Neue Nachrichten verschwinden nach 24 Stunden, 7 oder 90 Tagen, bei allen im Chat |
 | 💾 **Backup** | Profil, Freunde, Chats, Bilder und Dateien als passwortgeschützte Datei sichern und beim Einrichten wiederherstellen |
+| 🎮 **Mini-Spiele** | Tic-Tac-Toe und Schere, Stein, Papier direkt im Chat (＋ → Spiel). In Gruppen wählst du deinen Gegner, die anderen schauen zu. Bei Schere, Stein, Papier siehst du die Wahl des anderen erst nach deiner eigenen |
+| 🕓 **Nachrichten planen** | Nachricht schreiben, ＋ → Nachricht planen und eine Zeit wählen (z. B. „Morgen 7:00“). Gesendet wird, wenn WhatsUp zu der Zeit läuft, auch im Hintergrund, sonst beim nächsten Start |
+| @ **Erwähnungen** | In Gruppen @ tippen und jemanden auswählen, oder @alle. Erwähnte bekommen eine eigene Benachrichtigung und ein @ in der Chatliste |
+| 🔳 **QR-Code** | Deinen Code als QR-Code zeigen (Symbol neben deinem Code) und den deines Freundes mit der Kamera scannen (Symbol im Feld „Code hinzufügen“). Mit der Handy-Kamera gescannt öffnet sich die Web-Version und fragt, ob ihr Freunde werden wollt |
+| 📅 **Wochenrückblick** | Deine Woche in Zahlen: gesendete Nachrichten, Top-Chats, Lieblings-Emoji, aktivster Tag. Montags erscheint ein Hinweis über der Chatliste, sonst unter Einstellungen → Chats. Wird nur auf deinem Gerät berechnet |
 | 🔐 **Sicherheitsnummer** | Wie bei Signal: 60 Ziffern mit einem Freund vergleichen, um sicherzugehen, dass niemand dazwischensitzt |
 | 🧹 **Chat leeren** | Verlauf eines Chats löschen und Speicher freigeben. Übersicht aller Chats nach Größe in den Einstellungen |
 | 🌅 **Status** | Wie bei WhatsApp: ein oder mehrere Bilder mit Beschreibung teilen, 24 Stunden sichtbar. Ansehen als Slides (tippen, wischen, gedrückt halten = Pause), Reaktionen mit Emojis, „Angesehen von“ für deine eigenen Status |
@@ -85,7 +90,7 @@ Mit **Test senden** kommt nach 5 Sekunden ein echter Test-Push über den Server.
 | 🧭 **Leiste unten** | Status links, Chats in der Mitte, Einstellungen („Du“) rechts |
 | 📱 **Web-Version** | Für iPhone, iPad und Android, chattet direkt mit der Windows-App |
 | 😊 **Emojis** | Emoji-Auswahl mit Kategorien und „Zuletzt benutzt“. Nachrichten nur aus Emojis werden groß angezeigt |
-| 🏆 **Erfolge** | 29 Erfolge zum Freischalten, z. B. 25 Nachrichten, erstes GIF, Nachteule oder 7 Tage am Stück |
+| 🏆 **Erfolge** | 31 Erfolge zum Freischalten, z. B. 25 Nachrichten, erstes GIF, Nachteule, 7 Tage am Stück oder 5 gewonnene Mini-Spiele |
 | 🖼️ **Profil** | Profilbild, Name und Status. Deine Freunde sehen dein Bild und deine Erfolge |
 | 🐱 **Profilrahmen** | 11 Rahmen fürs Profilbild: Katzenohren, Hasenohren, Teufelshörner, Heiligenschein, Krone, Partyhut, Kopfhörer, Blumenkranz, Herzen, Funkeln, Neon |
 | 🔔 **Benachrichtigungen** | Windows-Benachrichtigungen wie bei Teams/Discord mit Profilbild. Ein Klick öffnet den Chat. Roter Zähler am Taskleisten-Icon |
@@ -103,7 +108,7 @@ Mit **Test senden** kommt nach 5 Sekunden ein echter Test-Push über den Server.
 ## 🚀 So benutzt du WhatsUp
 
 1. **Code teilen:** Oben steht dein Code. Mit **Kopieren** kannst du ihn einem Freund schicken.
-2. **Freund adden:** Den Code deines Freundes ins Feld eingeben und auf **Adden** klicken.
+2. **Freund adden:** Den Code deines Freundes ins Feld eingeben und auf **Adden** klicken, oder seinen QR-Code scannen.
    Dein Freund sieht dich danach automatisch auch in seiner Liste.
 3. **Chatten:** Auf den Namen klicken und lostippen. Mit `Enter` sendest du die Nachricht.
    Mit 😊 wählst du Emojis aus, mit 📎 schickst du Bilder oder GIFs. Du kannst Bilder auch einfügen (Strg+V) oder ins Fenster ziehen.
@@ -213,9 +218,11 @@ whatsup/
     ├── style.css    # Design
     ├── app.js       # Chat-Logik (PeerJS, Freunde, Gruppen, Bilder, Profil)
     ├── lib.js       # Reine Hilfsfunktionen (Suche, Dateien, Timer, Sicherheitsnummer, Verschlüsselung), getestet
+    ├── qr.js        # QR-Code-Generator ohne Bibliothek, getestet
+    ├── vendor/jsQR.js   # QR-Scanner (jsQR, Apache-2.0), wird erst beim Scannen geladen
     ├── emojis.js    # Emoji-Auswahl
     └── achievements.js  # Liste der Erfolge
-tests/               # Tests für src/lib.js (npm test)
+tests/               # Tests für src/lib.js und src/qr.js (npm test)
 web/                 # Nur Web-Version: Ersatz für preload.js, iPhone-Design, Manifest, Icons
 scripts/build-web.js # Baut die Web-Version aus src/ + web/
 relay/               # Briefkasten-Server (Cloudflare Worker): npm install && npx wrangler deploy
@@ -240,6 +247,7 @@ relay/               # Briefkasten-Server (Cloudflare Worker): npm install && np
 - [x] Backup & Wiederherstellen
 - [x] Sicherheitsnummer
 - [x] Verschlüsselter lokaler Verlauf (Windows)
+- [x] Mini-Spiele, geplante Nachrichten, @Erwähnungen, QR-Code, Wochenrückblick
 - [ ] Mehrere Geräte gleichzeitig (z. B. PC und iPhone mit demselben Code)
 - [ ] Gruppenanrufe
 - [ ] Bildschirm teilen in Anrufen
@@ -248,3 +256,5 @@ relay/               # Briefkasten-Server (Cloudflare Worker): npm install && np
 ## 📄 Lizenz
 
 [MIT](LICENSE) © Jeremy-Jud
+
+Der QR-Scanner [jsQR](https://github.com/cozmo/jsQR) in `src/vendor/` steht unter der Apache License 2.0 (`src/vendor/jsQR.LICENSE`).

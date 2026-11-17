@@ -452,6 +452,9 @@
         if (data.ctx !== 'group' && !c.friend) {
           c.friend = true;
           if (pendingAdd !== code) { notify('Neuer Freund', `${c.name} hat dich hinzugefügt.`); toast(`🤝 ${c.name} hat dich hinzugefügt`); }
+          // Unser Profil zurückschicken – sonst kennt der andere unseren Namen erst, wenn ihr
+          // beide gleichzeitig online seid (die Anfrage kam vielleicht über den Briefkasten)
+          sendData(code, helloPayload(code));
         }
         if (pendingAdd === code) { setStatus(`${c.name} wurde hinzugefügt ✓`); pendingAdd = null; $('addInput').value = ''; }
         saveMeta(); checkAchievements(); scheduleRender();
@@ -592,16 +595,23 @@
       const poll = validPoll(data.poll);
       if (poll) msg.poll = poll;
       if (data.fwd) msg.fwd = true;
+      const game = minigames.valid(data.game, chatId, from);
+      if (game) msg.game = game;
+      const men = gid ? mention.valid(data.men) : [];
+      if (men.length) msg.men = men;
       const exp = LIB.validTimer(data.exp);
       if (exp) msg.exp = exp;
       if (media) { msg.media = mediaMeta(media); putMedia(chatId, id, media.data); }
       list.push(msg);
+      if (msg.game) minigames.adopt(chatId, msg);
       saveChat(chatId);
       if (!gid) fire.mark(from, 'them', msg.ts);
       stats.received++;
       if (activeChat !== chatId || !document.hasFocus()) {
         unread[chatId] = (unread[chatId] || 0) + 1;
-        const title = gid ? `${groups[gid].name} – ${nameOf(from)}` : nameOf(from);
+        const forMe = !!(msg.men && msg.men.includes(me.code));
+        if (forMe) mention.mark(chatId, true);
+        const title = gid ? (forMe ? `${nameOf(from)} hat dich in „${groups[gid].name}“ erwähnt` : `${groups[gid].name} – ${nameOf(from)}`) : nameOf(from);
         notify(title, preview(msg), {
           chatId, icon: contacts[from] && contacts[from].avatar,
           replyPlaceholder: gid ? `Antwort an ${groups[gid].name}…` : `Antwort an ${nameOf(from)}…`,
@@ -631,6 +641,8 @@
     if (msg.reply) wire.reply = msg.reply;
     if (msg.poll) wire.poll = msg.poll;
     if (msg.fwd) wire.fwd = 1;
+    if (msg.game) wire.game = msg.game;
+    if (msg.men) wire.men = msg.men;
     if (msg.exp) wire.exp = msg.exp;
     if (msg.media) {
       const data = await getMedia(chatId, msg.id);
@@ -702,11 +714,13 @@
     const msg = { id: crypto.randomUUID(), from: me.code, text, ts: Date.now(), to, sentTo: [], deliveredTo: [] };
     if (extra.poll) msg.poll = extra.poll; // Umfrage (Text ist der Hinweis für ältere Versionen)
     if (extra.fwd) msg.fwd = true;         // weitergeleitet
+    if (extra.game) msg.game = extra.game; // Mini-Spiel
+    if (chatId.startsWith('g:') && !extra.fwd && !extra.poll && !extra.game) { const men = mention.find(chatId, text); if (men.length) msg.men = men; } // @Erwähnungen
     const exp = timerOf(chatId);            // verschwindende Nachrichten
     if (exp) msg.exp = exp;
     stopTyping(chatId);
     // Antwort auf eine Nachricht?
-    if (!extra.fwd && pendingReply && pendingReply.chatId === chatId) {
+    if (!extra.fwd && !extra.noReply && pendingReply && pendingReply.chatId === chatId) {
       const orig = findMsg(chatId, pendingReply.id);
       if (orig && !orig.deleted) msg.reply = replyRef(orig);
       clearReply();
@@ -848,7 +862,7 @@
 
   // ================= Weiterleiten =================
   const chatTitle = (chatId) => (chatId.startsWith('g:') ? (groups[chatId.slice(2)] || {}).name || 'Gruppe' : nameOf(chatId.slice(2)));
-  const canForward = (m) => !m.deleted && !m.sys && !m.poll && (m.text || m.media) && !(m.media && m.media.kind === 'sticker' && !stickers.isOwner());
+  const canForward = (m) => !m.deleted && !m.sys && !m.poll && !m.game && (m.text || m.media) && !(m.media && m.media.kind === 'sticker' && !stickers.isOwner());
   function openForward(chatId, m) {
     const targets = [...friendCodes().map((c) => 'u:' + c), ...Object.keys(groups).map((g) => 'g:' + g)]
       .sort((a, b) => ((lastMsg(b) || {}).ts || 0) - ((lastMsg(a) || {}).ts || 0));
@@ -1106,6 +1120,7 @@
     // Empfang bestätigen, damit der Absender nicht mehr über den Server nachschickt
     if (typeof data.aid === 'string') sendTo(from, { type: 'mack', aid: data.aid.slice(0, 64) });
     if (data.act === 'timer') { receiveTimer(chatId, from, data); return; }
+    if (data.act === 'move') { minigames.receive(chatId, from, data); return; }
     const id = String(data.id || '').slice(0, 64);
     const m = findMsg(chatId, id);
     if (data.act === 'del') {
@@ -1637,7 +1652,7 @@
   const fmtTime = (ts) => new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
   const fmtDay = (ts) => new Date(ts).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
   const durText = (s) => { s = Math.round(s || 0); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
-  const preview = (m) => (m.deleted ? '🚫 Diese Nachricht wurde gelöscht' : m.poll ? '📊 ' + m.poll.q : m.media
+  const preview = (m) => (m.deleted ? '🚫 Diese Nachricht wurde gelöscht' : m.poll ? '📊 ' + m.poll.q : m.game ? '🎮 ' + minigames.name(m.game.k) : m.media
     ? (m.media.kind === 'file' ? '📄 ' + m.media.name : m.media.kind === 'sticker' ? '🩷 Sticker' : m.media.kind === 'audio' ? '🎤 Sprachnachricht (' + durText(m.media.dur) + ')' : m.media.kind === 'video' ? '🎥 Video (' + durText(m.media.dur) + ')' : m.media.kind === 'gif' ? '🎞️ GIF' : '📷 Bild') + (m.text ? ' ' + m.text : '')
     : m.text);
 
@@ -1808,6 +1823,7 @@
     $('meName').textContent = me.name;
     $('myCode').textContent = me.code;
 
+    recap.renderBar();
     const q = $('listSearch').value.trim();
     let items = [
       ...friendCodes().map((c) => 'u:' + c),
@@ -1839,6 +1855,7 @@
       const tt = typingText(chatId);
       meta.appendChild(el('div', 'flast' + (tt ? ' typing' : ''), tt || sub));
       li.appendChild(meta);
+      if (mentioned[chatId]) li.appendChild(el('span', 'badge mention-badge', '@'));
       if (unread[chatId]) li.appendChild(el('span', 'badge', String(unread[chatId])));
       li.onclick = () => openChat(chatId);
       ul.appendChild(li);
@@ -1994,7 +2011,736 @@
       setTimeout(() => q.focus(), 0);
     });
   }
-  $('pollBtn').onclick = openNewPoll;
+  // ================= „+“-Menü im Chat: Spiel, Nachricht planen, Umfrage =================
+  function openMoreMenu() {
+    const chatId = activeChat;
+    if (!chatId) return;
+    hideEmoji(); closeMsgMenu(); mention.close();
+    const back = el('div', 'msg-menu-back');
+    back.id = 'msgMenuBack';
+    const menu = el('div', 'msg-menu more-menu');
+    back.appendChild(menu);
+    back.addEventListener('click', (e) => { if (e.target === back) closeMsgMenu(); });
+    const act = (label, sub, icon, fn) => {
+      const b = el('button', 'menu-item');
+      b.type = 'button';
+      const t = el('span', 'more-text');
+      t.append(el('span', '', label), el('span', 'muted more-sub', sub));
+      b.append(el('span', 'menu-ic', icon), t);
+      b.onclick = (e) => { e.stopPropagation(); closeMsgMenu(); fn(); };
+      menu.appendChild(b);
+    };
+    act('Spiel', 'Tic-Tac-Toe oder Schere, Stein, Papier', '🎮', () => minigames.openNew(chatId));
+    act('Nachricht planen', 'Später automatisch senden', '🕓', () => scheduled.openNew(chatId));
+    if (chatId.startsWith('g:')) act('Umfrage', 'Alle in der Gruppe stimmen ab', '📊', openNewPoll);
+    document.body.appendChild(back);
+    const r = $('moreBtn').getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = Math.max(8, r.top - menu.offsetHeight - 6) + 'px';
+  }
+  $('moreBtn').onclick = openMoreMenu;
+
+  const isWeb = document.documentElement.classList.contains('is-web');
+
+  // ================= Nachrichten planen =================
+  // Bleiben nur auf diesem Gerät. Gesendet wird, wenn WhatsUp zu der Zeit läuft (auch im Hintergrund),
+  // sonst beim nächsten Start.
+  const scheduled = (() => {
+    let list = store.load('scheduled', []).filter((s) => s && typeof s.text === 'string' && typeof s.chatId === 'string' && Number(s.at));
+    const save = () => store.save('scheduled', list);
+    const forChat = (chatId) => list.filter((s) => s.chatId === chatId).sort((a, b) => a.at - b.at);
+    const chatExists = (chatId) => {
+      if (!chatId.startsWith('g:')) return isFriend(chatId.slice(2));
+      const g = groups[chatId.slice(2)];
+      return !!(g && g.members.includes(me.code));
+    };
+    const pad = (n) => String(n).padStart(2, '0');
+    const toInput = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    function whenText(ts) {
+      const day0 = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+      const diff = Math.round((day0(ts) - day0(Date.now())) / 864e5);
+      const t = fmtTime(ts);
+      if (diff === 0) return `heute ${t}`;
+      if (diff === 1) return `morgen ${t}`;
+      return new Date(ts).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' }) + ' ' + t;
+    }
+    function tick() {
+      if (!me) return;
+      const now = Date.now();
+      const due = list.filter((s) => s.at <= now).sort((a, b) => a.at - b.at);
+      if (!due.length) return;
+      list = list.filter((s) => s.at > now);
+      save();
+      due.forEach((s) => {
+        if (!chatExists(s.chatId)) return;
+        sendMessage(s.chatId, s.text, null, { noReply: true });
+        toast(`🕓 Geplante Nachricht an ${chatTitle(s.chatId)} gesendet`);
+      });
+      scheduleRender();
+    }
+    function add(chatId, text, at) { list.push({ id: crypto.randomUUID(), chatId, text, at }); save(); scheduleRender(); }
+    function remove(id) { list = list.filter((s) => s.id !== id); save(); scheduleRender(); }
+    function sendNow(id) {
+      const s = list.find((x) => x.id === id);
+      if (!s) return;
+      remove(id);
+      if (chatExists(s.chatId)) sendMessage(s.chatId, s.text, null, { noReply: true });
+    }
+    function openNew(chatId, edit) {
+      openModal((box) => {
+        box.appendChild(el('h3', '', edit ? '🕓 Geplante Nachricht ändern' : '🕓 Nachricht planen'));
+        box.appendChild(el('div', 'muted', 'An ' + chatTitle(chatId)));
+        const ta = el('textarea', 'sched-text');
+        ta.maxLength = MAX_TEXT; ta.rows = 3; ta.placeholder = 'Nachricht';
+        const draft = $('msgInput').value.trim();
+        ta.value = edit ? edit.text : draft;
+        box.appendChild(ta);
+        const at = (addDays, h) => { const d = new Date(); d.setDate(d.getDate() + addDays); d.setHours(h, 0, 0, 0); return d.getTime(); };
+        const chips = [['In 1 Std.', () => Date.now() + 36e5]];
+        if (new Date().getHours() < 17) chips.push(['Heute 18:00', () => at(0, 18)]);
+        chips.push(['Morgen 7:00', () => at(1, 7)], ['Morgen 12:00', () => at(1, 12)]);
+        const input = el('input', 'sched-when');
+        input.type = 'datetime-local';
+        input.min = toInput(Date.now());
+        input.value = toInput(edit ? edit.at : Date.now() + 36e5);
+        const row = el('div', 'sched-chips');
+        chips.forEach(([label, ts]) => {
+          const b = el('button', 'sched-chip', label);
+          b.type = 'button';
+          b.onclick = () => { input.value = toInput(ts()); upd(); };
+          row.appendChild(b);
+        });
+        box.append(row, input);
+        const info = el('div', 'muted sched-info');
+        const err = el('div', 'status err');
+        box.append(info, err);
+        const pick = () => new Date(input.value).getTime();
+        const upd = () => {
+          const t = pick();
+          info.textContent = Number.isFinite(t) && t > Date.now()
+            ? `Wird ${whenText(t)} gesendet. ` + (isWeb ? 'WhatsUp muss dann geöffnet sein, sonst beim nächsten Öffnen.' : 'WhatsUp muss dann laufen (auch im Hintergrund), sonst beim nächsten Start.')
+            : '';
+        };
+        input.addEventListener('input', upd);
+        upd();
+        box.appendChild(buttons(['Abbrechen', 'ghost', closeModal], [edit ? 'Speichern' : 'Planen', 'primary', () => {
+          const text = clean(ta.value, MAX_TEXT), t = pick();
+          if (!text) { err.textContent = 'Schreib eine Nachricht.'; ta.focus(); return; }
+          if (!Number.isFinite(t) || t < Date.now() + 30000) { err.textContent = 'Wähle eine Zeit in der Zukunft.'; return; }
+          if (t > Date.now() + 365 * 864e5) { err.textContent = 'Höchstens ein Jahr im Voraus.'; return; }
+          if (edit) remove(edit.id);
+          else if (draft && text === draft && activeChat === chatId) { $('msgInput').value = ''; voice.syncComposer(); }
+          add(chatId, text, t);
+          closeModal();
+          toast(`🕓 Geplant: ${whenText(t)}`);
+        }]));
+        setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
+      });
+    }
+    function openList(chatId) {
+      openModal((box) => {
+        const draw = () => {
+          const items = forChat(chatId);
+          if (!items.length) { closeModal(); return; }
+          box.replaceChildren(el('h3', '', '🕓 Geplante Nachrichten'));
+          items.forEach((s) => {
+            const card = el('div', 'sched-item');
+            card.append(el('div', 'sched-item-when', whenText(s.at)), el('div', 'sched-item-text', s.text));
+            const acts = el('div', 'sched-acts');
+            const mk = (label, cls, fn) => { const b = el('button', cls, label); b.type = 'button'; b.onclick = fn; acts.appendChild(b); };
+            mk('Ändern', 'link', () => openNew(chatId, s));
+            mk('Jetzt senden', 'link', () => { sendNow(s.id); draw(); });
+            mk('Löschen', 'link danger-link', () => { remove(s.id); draw(); });
+            card.appendChild(acts);
+            box.appendChild(card);
+          });
+          box.appendChild(buttons(['Schließen', 'primary', closeModal]));
+        };
+        draw();
+      });
+    }
+    function renderBar(chatId) {
+      const bar = $('schedBar'), items = chatId ? forChat(chatId) : [];
+      bar.classList.toggle('hidden', !items.length);
+      if (!items.length) return;
+      bar.replaceChildren(
+        el('span', 'sched-bar-text', `🕓 ${items.length === 1 ? '1 geplante Nachricht' : items.length + ' geplante Nachrichten'} · ${whenText(items[0].at)}`),
+        el('span', 'link', 'Anzeigen'));
+      bar.onclick = () => openList(chatId);
+    }
+    return { tick, openNew, renderBar };
+  })();
+
+  // ================= @Erwähnungen in Gruppen =================
+  // Beim Tippen von @ erscheint eine Auswahl. Erwähnte bekommen eine eigene Benachrichtigung und ein @ in der Chatliste.
+  const mentioned = store.load('mentioned', {}); // chatId -> true (ungelesene Erwähnung)
+  const mention = (() => {
+    const box = $('mentionBox'), input = $('msgInput');
+    let items = [], sel = 0, range = null;
+    function candidates(chatId, q) {
+      const g = groups[chatId.slice(2)];
+      if (!g) return [];
+      const list = others(g).map((c) => ({ code: c, name: nameOf(c) })).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+      const hit = (name) => !q || LIB.matchText(name, q);
+      return [...(hit('alle') ? [{ code: '*', name: 'alle' }] : []), ...list.filter((x) => hit(x.name))].slice(0, 6);
+    }
+    function close() { items = []; sel = 0; range = null; box.classList.add('hidden'); }
+    function draw() {
+      box.replaceChildren(...items.map((it, i) => {
+        const b = el('button', 'mention-opt' + (i === sel ? ' on' : ''));
+        b.type = 'button';
+        if (it.code === '*') b.append(el('span', 'mention-all', '@'), el('span', 'fname', 'alle'), el('span', 'muted', 'Alle in der Gruppe'));
+        else {
+          const c = contacts[it.code];
+          b.append(avatarEl(it.name, c && c.avatar, it.code, 'sm', null, c && c.frame), el('span', 'fname', it.name));
+        }
+        b.onmousedown = (e) => e.preventDefault(); // Fokus im Eingabefeld lassen
+        b.onclick = () => pick(i);
+        return b;
+      }));
+      box.classList.remove('hidden');
+    }
+    function update() {
+      const chatId = activeChat;
+      if (!chatId || !chatId.startsWith('g:')) { close(); return; }
+      const pos = input.selectionStart, before = input.value.slice(0, pos);
+      const m = before.match(/(^|\s)@([^\s@]{0,24})$/);
+      if (!m) { close(); return; }
+      items = candidates(chatId, m[2]);
+      if (!items.length) { close(); return; }
+      range = [pos - m[2].length - 1, pos];
+      sel = Math.min(sel, items.length - 1);
+      draw();
+    }
+    function pick(i) {
+      const it = items[i];
+      if (!it || !range) return;
+      const ins = '@' + it.name + ' ';
+      input.value = input.value.slice(0, range[0]) + ins + input.value.slice(range[1]);
+      const p = range[0] + ins.length;
+      close();
+      input.focus();
+      input.setSelectionRange(p, p);
+      input.dispatchEvent(new Event('input'));
+    }
+    input.addEventListener('keydown', (e) => {
+      if (!items.length) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); sel = (sel + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length; draw(); }
+      else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(sel); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+    });
+    input.addEventListener('input', update);
+    input.addEventListener('click', update);
+    input.addEventListener('blur', () => setTimeout(close, 150));
+
+    // Wer wird in diesem Text erwähnt? (@alle = alle anderen in der Gruppe)
+    function find(chatId, text) {
+      const g = groups[chatId.slice(2)];
+      if (!g || !text.includes('@')) return [];
+      if (/(^|\s)@alle(?![\p{L}\p{N}])/iu.test(text)) return others(g);
+      const low = text.toLowerCase();
+      return others(g).filter((c) => low.includes('@' + nameOf(c).toLowerCase()));
+    }
+    const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Text mit hervorgehobenen @Namen
+    function textEl(m) {
+      const div = el('div', 'text');
+      const names = (m.men || []).map((c) => [c, nameOf(c)]);
+      if (!names.length || !m.text.includes('@')) { div.textContent = m.text; return div; }
+      const pats = [...names.map(([, n]) => '@' + esc(n)), '@alle'].sort((a, b) => b.length - a.length);
+      const re = new RegExp(pats.join('|'), 'gi');
+      let last = 0;
+      for (const mt of m.text.matchAll(re)) {
+        if (mt.index > last) div.append(m.text.slice(last, mt.index));
+        const word = mt[0], low = word.toLowerCase();
+        const hit = names.find(([, n]) => '@' + n.toLowerCase() === low);
+        const span = el('span', 'mention' + ((hit && hit[0] === me.code) || low === '@alle' ? ' self' : ''), word);
+        if (hit && hit[0] !== me.code) {
+          span.classList.add('tap');
+          span.onclick = (e) => { e.stopPropagation(); openProfile(hit[0], hit[1]); };
+        }
+        div.append(span);
+        last = mt.index + word.length;
+      }
+      if (last < m.text.length) div.append(m.text.slice(last));
+      return div;
+    }
+    const valid = (v) => (Array.isArray(v) ? [...new Set(v.map(String).filter((c) => CODE_RE.test(c)))].slice(0, 256) : []);
+    function mark(chatId, on) {
+      if (!!mentioned[chatId] === on) return;
+      if (on) mentioned[chatId] = true; else delete mentioned[chatId];
+      store.save('mentioned', mentioned);
+    }
+    return { close, find, textEl, valid, mark };
+  })();
+
+  // ================= Mini-Spiele im Chat =================
+  // Spiel-Nachricht mit game = { k: 'ttt' | 'rps', vs: Code des Gegners }. Züge gehen als Aktion an alle im Chat.
+  // Tic-Tac-Toe: m.mv = { Zugnummer: Feld 0–8 }, abwechselnd, ✕ = wer gestartet hat.
+  // Schere, Stein, Papier: m.mv = { Code: 0 Stein | 1 Papier | 2 Schere }. Die Wahl des anderen siehst du erst, wenn du selbst gewählt hast.
+  const minigames = (() => {
+    const KINDS = { ttt: { icon: '❌⭕', name: 'Tic-Tac-Toe' }, rps: { icon: '✊✋✌️', name: 'Schere, Stein, Papier' } };
+    const RPS = ['✊', '✋', '✌️'], RPS_NAME = ['Stein', 'Papier', 'Schere'];
+    const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+    const orphans = {}; // Züge, die vor der Spiel-Nachricht ankamen
+    function valid(g, chatId, from) {
+      if (!g || typeof g !== 'object' || !Object.hasOwn(KINDS, g.k) || typeof g.vs !== 'string' || !CODE_RE.test(g.vs) || g.vs === from) return null;
+      if (chatId.startsWith('u:')) {
+        if (g.vs !== (from === me.code ? chatId.slice(2) : me.code)) return null;
+      } else {
+        const grp = groups[chatId.slice(2)];
+        if (!grp || !grp.members.includes(g.vs)) return null;
+      }
+      return { k: g.k, vs: g.vs };
+    }
+    const players = (m) => [m.from, m.game.vs];
+    function state(m) {
+      const [x, o] = players(m), mv = m.mv || {};
+      if (m.game.k === 'rps') {
+        const a = mv[x], b = mv[o], done = a != null && b != null;
+        // 1 schlägt 0 (Papier > Stein), 2 schlägt 1 (Schere > Papier), 0 schlägt 2 (Stein > Schere)
+        const winner = done && a !== b ? ((a - b + 3) % 3 === 1 ? x : o) : null;
+        return { done, winner, picks: { [x]: a, [o]: b }, turn: null };
+      }
+      const board = new Array(9).fill(null);
+      let n = 0, winner = null, line = null;
+      while (mv[n] != null && !winner && n < 9) {
+        if (board[mv[n]] != null) break; // ungültiger Zug: hier aufhören
+        board[mv[n]] = n % 2 ? o : x;
+        n++;
+        for (const l of LINES) if (board[l[0]] && board[l[0]] === board[l[1]] && board[l[1]] === board[l[2]]) { winner = board[l[0]]; line = l; }
+      }
+      const done = !!winner || n >= 9;
+      return { board, n, winner, line, done, turn: done ? null : (n % 2 ? o : x) };
+    }
+    function apply(m, from, n, v) {
+      if (!m.game || m.deleted || !players(m).includes(from) || !Number.isInteger(v)) return false;
+      m.mv = m.mv || {};
+      if (m.game.k === 'rps') {
+        if (v < 0 || v > 2 || m.mv[from] != null) return false;
+        m.mv[from] = v;
+        return true;
+      }
+      if (!Number.isInteger(n) || n < 0 || n > 8 || v < 0 || v > 8 || m.mv[n] != null) return false;
+      if ((n % 2 ? m.game.vs : m.from) !== from) return false;
+      m.mv[n] = v;
+      return true;
+    }
+    // Fertiges Spiel einmal für Statistik und Erfolge zählen
+    function settle(m) {
+      const s = state(m);
+      if (!s.done || m.gc || !players(m).includes(me.code)) return s;
+      m.gc = 1;
+      stats.gamesPlayed = (stats.gamesPlayed || 0) + 1;
+      if (s.winner === me.code) stats.gamesWon = (stats.gamesWon || 0) + 1;
+      saveMeta(); checkAchievements();
+      return s;
+    }
+    function play(chatId, m, v) {
+      const s = state(m);
+      if (s.done || !players(m).includes(me.code)) return;
+      let n = 0;
+      if (m.game.k === 'ttt') { if (s.turn !== me.code || s.board[v] != null) return; n = s.n; }
+      if (!apply(m, me.code, n, v)) return;
+      settle(m);
+      saveChat(chatId); scheduleRender();
+      sendAction(chatId, { act: 'move', id: m.id, n, v });
+    }
+    function receive(chatId, from, data) {
+      const id = String(data.id || '').slice(0, 64), n = Number(data.n), v = Number(data.v);
+      const m = findMsg(chatId, id);
+      if (!m) {
+        const k = chatId + '|' + id;
+        if (Object.keys(orphans).length < 200) (orphans[k] = orphans[k] || []).push({ from, n, v });
+        return;
+      }
+      if (!apply(m, from, n, v)) return;
+      const s = settle(m);
+      saveChat(chatId); scheduleRender();
+      if (from === me.code || !players(m).includes(me.code) || (activeChat === chatId && document.hasFocus())) return;
+      const who = nameOf(from);
+      let text = null;
+      if (s.done) text = s.winner === me.code ? 'Du hast gewonnen! 🎉' : s.winner ? `${who} hat gewonnen` : 'Unentschieden 🤝';
+      else if (m.game.k === 'ttt' && s.turn === me.code) text = `${who} hat gezogen – du bist dran!`;
+      else if (m.game.k === 'rps') text = `${who} hat gewählt – jetzt du!`;
+      if (text) notify(`🎮 ${KINDS[m.game.k].name}`, text, { chatId, icon: contacts[from] && contacts[from].avatar });
+    }
+    // Spiel-Nachricht ist da: früher angekommene Züge nachholen
+    function adopt(chatId, m) {
+      const k = chatId + '|' + m.id, list = orphans[k];
+      if (!list) return;
+      delete orphans[k];
+      list.forEach((x) => apply(m, x.from, x.n, x.v));
+      settle(m);
+    }
+    const who = (c) => (c === me.code ? 'Du' : nameOf(c));
+    function view(chatId, m) {
+      const s = state(m), [x, o] = players(m), meIn = players(m).includes(me.code);
+      const box = el('div', 'game game-' + m.game.k);
+      box.appendChild(el('div', 'game-title', `${KINDS[m.game.k].icon} ${KINDS[m.game.k].name}`));
+      if (m.game.k === 'ttt') {
+        box.appendChild(el('div', 'game-sub', `${who(x)} ✕ · ${who(o)} ◯`));
+        const grid = el('div', 'ttt');
+        s.board.forEach((c, i) => {
+          const b = el('button', 'ttt-cell' + (c ? (c === x ? ' x' : ' o') : '') + (s.line && s.line.includes(i) ? ' win' : ''), c ? (c === x ? '✕' : '◯') : '');
+          b.type = 'button';
+          b.disabled = s.done || s.turn !== me.code || !!c;
+          b.setAttribute('aria-label', `Feld ${i + 1}`);
+          b.onclick = (e) => { e.stopPropagation(); play(chatId, m, i); };
+          grid.appendChild(b);
+        });
+        box.appendChild(grid);
+      } else if (s.done) {
+        const row = el('div', 'rps-result');
+        const side = (c) => {
+          const d = el('div', 'rps-side' + (s.winner === c ? ' win' : ''));
+          d.append(el('div', 'rps-big', RPS[s.picks[c]]), el('div', 'rps-name', who(c)));
+          d.title = RPS_NAME[s.picks[c]];
+          return d;
+        };
+        row.append(side(x), el('div', 'rps-vs', 'vs'), side(o));
+        box.appendChild(row);
+      } else if (meIn && s.picks[me.code] == null) {
+        box.appendChild(el('div', 'game-sub', `Gegen ${nameOf(me.code === x ? o : x)} – wähle:`));
+        const picks = el('div', 'rps-picks');
+        RPS.forEach((e, i) => {
+          const b = el('button', 'rps-pick', e);
+          b.type = 'button'; b.title = RPS_NAME[i];
+          b.onclick = (ev) => { ev.stopPropagation(); play(chatId, m, i); };
+          picks.appendChild(b);
+        });
+        box.appendChild(picks);
+      } else {
+        const line = (c) => `${who(c)}: ` + (s.picks[c] == null ? 'wählt noch …' : c === me.code ? `${RPS[s.picks[c]]} gewählt` : '✓ hat gewählt');
+        box.append(el('div', 'game-sub', line(x)), el('div', 'game-sub', line(o)));
+      }
+      let status = '';
+      if (s.done) status = s.winner ? (s.winner === me.code ? '🎉 Du hast gewonnen!' : `🏆 ${nameOf(s.winner)} hat gewonnen`) : '🤝 Unentschieden';
+      else if (m.game.k === 'ttt') status = s.turn === me.code ? '👉 Du bist dran' : `${nameOf(s.turn)} ist dran …`;
+      if (status) box.appendChild(el('div', 'game-status' + (s.done && s.winner === me.code ? ' won' : ''), status));
+      if (s.done && meIn) {
+        const again = el('button', 'game-again', '🔁 Nochmal');
+        again.type = 'button';
+        again.onclick = (e) => { e.stopPropagation(); start(chatId, m.game.k, m.from === me.code ? m.game.vs : m.from); };
+        box.appendChild(again);
+      }
+      return box;
+    }
+    function start(chatId, k, vs) {
+      const game = valid({ k, vs }, chatId, me.code);
+      if (!game) return;
+      sendMessage(chatId, `🎮 ${KINDS[k].name}: ${me.name} fordert ${nameOf(vs)} heraus! (Zum Mitspielen WhatsUp aktualisieren)`, null, { game, noReply: true });
+    }
+    function openNew(chatId) {
+      const isGroup = chatId.startsWith('g:');
+      const opps = isGroup ? others(groups[chatId.slice(2)] || { members: [] }) : [chatId.slice(2)];
+      let kind = 'ttt', vs = isGroup ? null : opps[0];
+      openModal((box) => {
+        box.appendChild(el('h3', '', '🎮 Spiel starten'));
+        const kinds = el('div', 'game-kinds');
+        Object.entries(KINDS).forEach(([k, d]) => {
+          const b = el('button', 'game-kind' + (k === kind ? ' on' : ''));
+          b.type = 'button';
+          b.append(el('span', 'game-kind-ic', d.icon), el('span', 'game-kind-name', d.name));
+          b.onclick = () => { kind = k; kinds.querySelectorAll('.game-kind').forEach((x) => x.classList.toggle('on', x === b)); };
+          kinds.appendChild(b);
+        });
+        box.appendChild(kinds);
+        if (isGroup) {
+          box.appendChild(el('div', 'label', 'Gegen wen?'));
+          if (!opps.length) box.appendChild(el('div', 'muted', 'In dieser Gruppe ist sonst niemand.'));
+          const ul = el('ul', 'members game-opps');
+          opps.forEach((c) => {
+            const ct = contacts[c];
+            const li = el('li');
+            li.append(avatarEl(nameOf(c), ct && ct.avatar, c, 'sm', null, ct && ct.frame), el('span', 'fname', nameOf(c)));
+            li.onclick = () => { vs = c; ul.querySelectorAll('li').forEach((y) => y.classList.toggle('on', y === li)); };
+            ul.appendChild(li);
+          });
+          box.appendChild(ul);
+        } else box.appendChild(el('div', 'muted', `Gegen ${nameOf(vs)}`));
+        const err = el('div', 'status err');
+        box.appendChild(err);
+        box.appendChild(buttons(['Abbrechen', 'ghost', closeModal], ['Herausfordern', 'primary', () => {
+          if (!vs) { err.textContent = 'Wähle, gegen wen du spielst.'; return; }
+          closeModal();
+          start(chatId, kind, vs);
+        }]));
+      });
+    }
+    return { valid, view, receive, adopt, openNew, state, name: (k) => (KINDS[k] || {}).name || 'Spiel' };
+  })();
+
+  // ================= Wochenrückblick =================
+  // Wird nur aus dem Verlauf auf diesem Gerät berechnet, nichts geht an einen Server.
+  const recap = (() => {
+    const DAY = 864e5;
+    const weekStart = (ts) => { const d = new Date(ts); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); };
+    const nextWeek = (start) => weekStart(start + 8 * DAY);
+    const lastWeek = () => weekStart(weekStart(Date.now()) - DAY);
+    const EMOJI_RE = /\p{Extended_Pictographic}(?:️|\p{Emoji_Modifier}|‍\p{Extended_Pictographic}️?)*/gu;
+    const WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+    function compute(start) {
+      const end = nextWeek(start);
+      const r = { start, end, sent: 0, recv: 0, media: 0, voice: 0, words: 0, games: 0, wins: 0, mentions: 0, chats: {}, emojis: {}, days: new Array(7).fill(0), hours: new Array(24).fill(0) };
+      for (const [chatId, list] of Object.entries(chats)) {
+        if (!(chatId.startsWith('g:') ? groups[chatId.slice(2)] : contacts[chatId.slice(2)])) continue;
+        for (const m of list) {
+          if (m.sys || m.deleted || m.ts < start || m.ts >= end) continue;
+          r.chats[chatId] = (r.chats[chatId] || 0) + 1;
+          if (m.game && (m.from === me.code || m.game.vs === me.code)) {
+            const s = minigames.state(m);
+            if (s.done) { r.games++; if (s.winner === me.code) r.wins++; }
+          }
+          if (m.from !== me.code) { r.recv++; if (m.men && m.men.includes(me.code)) r.mentions++; continue; }
+          r.sent++;
+          const d = new Date(m.ts);
+          r.days[(d.getDay() + 6) % 7]++;
+          r.hours[d.getHours()]++;
+          if (m.media) { if (m.media.kind === 'audio') r.voice++; else r.media++; }
+          if (m.text && !m.game && !m.poll) {
+            r.words += (m.text.match(/\S+/g) || []).length;
+            for (const e of m.text.match(EMOJI_RE) || []) r.emojis[e] = (r.emojis[e] || 0) + 1;
+          }
+        }
+      }
+      return r;
+    }
+    const fmtD = (ts) => new Date(ts).toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
+    const num = (n) => n.toLocaleString('de-DE');
+    function tile(icon, value, label) {
+      const t = el('div', 'recap-tile');
+      t.append(el('div', 'recap-tile-ic', icon), el('div', 'recap-tile-val', value), el('div', 'recap-tile-label', label));
+      return t;
+    }
+    function section(title) { const s = el('div', 'recap-sec'); s.appendChild(el('div', 'recap-sec-title', title)); return s; }
+    function draw(box, start) {
+      const r = compute(start), prev = compute(weekStart(start - DAY));
+      const isNow = start === weekStart(Date.now());
+      box.replaceChildren();
+      box.appendChild(el('h3', '', '📅 Dein Wochenrückblick'));
+      const seg = el('div', 'segmented recap-seg');
+      [['Letzte Woche', lastWeek()], ['Diese Woche', weekStart(Date.now())]].forEach(([label, st]) => {
+        const b = el('button', st === start ? 'active' : '', label);
+        b.type = 'button';
+        b.onclick = () => draw(box, st);
+        seg.appendChild(b);
+      });
+      box.appendChild(seg);
+      box.appendChild(el('div', 'muted recap-range', `${fmtD(start)} – ${fmtD(r.end - DAY)}` + (isNow ? ' (bis jetzt)' : '')));
+      if (!r.sent && !r.recv) {
+        box.appendChild(el('div', 'recap-empty', isNow ? '🌱 Diese Woche ist noch ruhig. Schreib jemandem!' : '😴 In dieser Woche war es ruhig, keine Nachrichten.'));
+        box.appendChild(buttons(['Schließen', 'primary', closeModal]));
+        return;
+      }
+      // Hauptzahl mit Vergleich zur Woche davor
+      const hero = el('div', 'recap-hero');
+      hero.append(el('div', 'recap-hero-val', num(r.sent)), el('div', 'recap-hero-label', r.sent === 1 ? 'Nachricht gesendet' : 'Nachrichten gesendet'));
+      if (prev.sent && !isNow) {
+        const pct = Math.round((r.sent - prev.sent) / prev.sent * 100);
+        hero.appendChild(el('div', 'recap-trend' + (pct >= 0 ? ' up' : ' down'), pct === 0 ? 'Genauso viele wie in der Woche davor' : `${pct > 0 ? '▲' : '▼'} ${Math.abs(pct)} % ${pct > 0 ? 'mehr' : 'weniger'} als in der Woche davor`));
+      }
+      box.appendChild(hero);
+      const tiles = el('div', 'recap-tiles');
+      tiles.append(tile('📥', num(r.recv), 'empfangen'), tile('📝', num(r.words), 'Wörter'), tile('📷', num(r.media), 'Bilder & GIFs'), tile('🎤', num(r.voice), 'Sprachnachr.'));
+      if (r.games) tiles.appendChild(tile('🎮', `${r.wins}/${r.games}`, 'Spiele gewonnen'));
+      if (r.mentions) tiles.appendChild(tile('@', num(r.mentions), 'Mal erwähnt'));
+      if (isNow && fire.currentMax()) tiles.appendChild(tile('🔥', num(fire.currentMax()), 'Tage Streak'));
+      box.appendChild(tiles);
+      // Top-Chats
+      const top = Object.entries(r.chats).sort((a, b) => b[1] - a[1]).slice(0, 3);
+      if (top.length) {
+        const sec = section('💬 Deine Top-Chats');
+        const most = top[0][1];
+        top.forEach(([chatId, n], i) => {
+          const row = el('div', 'recap-chat');
+          const bar = el('div', 'recap-bar-fill');
+          bar.style.width = Math.max(4, Math.round(n / most * 100)) + '%';
+          const meta = el('div', 'recap-chat-meta');
+          const head = el('div', 'recap-chat-head');
+          head.append(el('span', 'fname', `${['🥇', '🥈', '🥉'][i]} ${chatTitle(chatId)}`), el('span', 'muted', `${num(n)} Nachr.`));
+          const track = el('div', 'recap-track');
+          track.appendChild(bar);
+          meta.append(head, track);
+          row.append(chatAvatar(chatId, 'sm'), meta);
+          row.onclick = () => { closeModal(); openChat(chatId); };
+          sec.appendChild(row);
+        });
+        box.appendChild(sec);
+      }
+      // Lieblings-Emojis
+      const emo = Object.entries(r.emojis).sort((a, b) => b[1] - a[1]).slice(0, 5);
+      if (emo.length) {
+        const sec = section('😊 Lieblings-Emoji');
+        const row = el('div', 'recap-emojis');
+        emo.forEach(([e, n], i) => {
+          const d = el('div', 'recap-emoji' + (i === 0 ? ' first' : ''));
+          d.append(el('div', 'recap-emoji-e', e), el('div', 'muted', `${n}×`));
+          row.appendChild(d);
+        });
+        sec.appendChild(row);
+        box.appendChild(sec);
+      }
+      // Aktivster Tag + Uhrzeit
+      if (r.sent) {
+        const sec = section('📊 Wann du schreibst');
+        const most = Math.max(...r.days), best = r.days.indexOf(most);
+        const chart = el('div', 'recap-days');
+        chart.setAttribute('role', 'img');
+        chart.setAttribute('aria-label', 'Gesendete Nachrichten pro Wochentag: ' + r.days.map((n, i) => `${WEEKDAYS[i]} ${n}`).join(', '));
+        r.days.forEach((n, i) => {
+          const col = el('div', 'recap-day' + (i === best ? ' best' : ''));
+          col.title = `${WEEKDAYS[i]}: ${n}`;
+          const b = el('div', 'recap-day-bar');
+          b.style.height = (n ? Math.max(6, Math.round(n / most * 100)) : 0) + '%';
+          const wrap = el('div', 'recap-day-track');
+          wrap.appendChild(b);
+          col.append(el('div', 'recap-day-n', n ? String(n) : ''), wrap, el('div', 'recap-day-l', WEEKDAYS[i].slice(0, 2)));
+          chart.appendChild(col);
+        });
+        sec.appendChild(chart);
+        const hour = r.hours.indexOf(Math.max(...r.hours));
+        const night = r.hours.slice(0, 4).reduce((a, b) => a + b, 0);
+        sec.appendChild(el('div', 'recap-note', `Am meisten am ${WEEKDAYS[best]}, meistens um ${hour} Uhr.` + (night ? ` 🦉 ${night}× nach Mitternacht.` : '')));
+        box.appendChild(sec);
+      }
+      box.appendChild(buttons(['Schließen', 'primary', closeModal]));
+    }
+    // Hinweis über der Chatliste: einmal pro Woche, wenn in der Woche davor etwas los war
+    let barFor = null;
+    function check() {
+      const last = lastWeek();
+      if (store.load('recapSeen', 0) >= last) { barFor = null; return; }
+      if (barFor === last) return;
+      const r = compute(last);
+      if (r.sent + r.recv >= 5) barFor = last;
+      else { barFor = null; store.save('recapSeen', last); }
+    }
+    function renderBar() { $('recapBar').classList.toggle('hidden', !barFor); }
+    function seen() { if (barFor) store.save('recapSeen', barFor); barFor = null; renderBar(); }
+    function open(start = lastWeek()) {
+      if (barFor === start) seen();
+      openModal((box) => { box.classList.add('recap-box'); draw(box, start); });
+    }
+    $('recapOpen').onclick = () => open();
+    $('recapClose').onclick = seen;
+    $('recapBtn').onclick = () => open(compute(lastWeek()).sent || !compute(weekStart(Date.now())).sent ? lastWeek() : weekStart(Date.now()));
+    return { check, renderBar, open };
+  })();
+
+  // ================= QR-Code: Freunde hinzufügen =================
+  // Der QR-Code enthält den Link zur Web-Version mit ?add=CODE. Scannen geht in WhatsUp („QR scannen“)
+  // oder mit der normalen Handy-Kamera (öffnet die Web-Version und fragt, ob der Freund hinzugefügt werden soll).
+  const qr = (() => {
+    const link = () => WEB_URL + '?add=' + me.code;
+    let stream = null, raf = 0;
+    function showMine() {
+      openModal((box) => {
+        box.appendChild(el('h3', '', '🔳 Dein QR-Code'));
+        const img = document.createElement('img');
+        img.className = 'qr-img';
+        img.alt = `QR-Code mit deinem Code ${me.code}`;
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(window.WHATSUP_QR.toSvg(link(), 'M'));
+        box.appendChild(img);
+        box.appendChild(el('div', 'qr-code', me.code));
+        box.appendChild(el('p', 'muted center', 'Dein Freund tippt in WhatsUp neben „Code hinzufügen“ auf Scannen. Mit der Handy-Kamera geht es auch, dann öffnet sich WhatsUp im Browser.'));
+        box.appendChild(buttons(['Link kopieren', 'ghost', async () => {
+          try { await navigator.clipboard.writeText(link()); toast('Link kopiert'); } catch { toast('Kopieren fehlgeschlagen'); }
+        }], ['Fertig', 'primary', closeModal]));
+      });
+    }
+    // Code aus einem gescannten Text holen: Link mit ?add=… oder nur der Code
+    function codeFrom(text) {
+      const s = String(text || '').trim();
+      const m = s.match(/[?&]add=([A-Za-z0-9]{6})(?![A-Za-z0-9])/);
+      const c = (m ? m[1] : s).toUpperCase();
+      return CODE_RE.test(c) ? c : null;
+    }
+    function addCode(code) {
+      if (view !== 'viewList') show('viewList');
+      $('addInput').value = code;
+      $('addForm').requestSubmit();
+    }
+    function loadLib() {
+      if (window.jsQR) return Promise.resolve(window.jsQR);
+      return new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'vendor/jsQR.js';
+        s.onload = () => (window.jsQR ? res(window.jsQR) : rej(new Error('jsQR')));
+        s.onerror = () => rej(new Error('jsQR'));
+        document.head.appendChild(s);
+      });
+    }
+    function stop() {
+      cancelAnimationFrame(raf); raf = 0;
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      stream = null;
+    }
+    function scan() {
+      openModal((box) => {
+        box.appendChild(el('h3', '', '📷 QR-Code scannen'));
+        const wrap = el('div', 'qr-scan');
+        const video = document.createElement('video');
+        video.muted = true; video.playsInline = true; video.setAttribute('playsinline', '');
+        wrap.append(video, el('div', 'qr-frame'));
+        const msg = el('div', 'muted center', 'Kamera wird gestartet …');
+        box.append(wrap, msg, buttons(['Abbrechen', 'ghost', closeModal]));
+        onModalClose = stop;
+        const alive = () => document.body.contains(video) && !$('modal').classList.contains('hidden');
+        (async () => {
+          try {
+            const [lib, s] = await Promise.all([loadLib(), navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })]);
+            stream = s;
+            if (!alive()) { stop(); return; }
+            video.srcObject = s;
+            await video.play();
+            msg.textContent = 'Halte den QR-Code deines Freundes vor die Kamera.';
+            const cv = document.createElement('canvas'), ctx = cv.getContext('2d', { willReadFrequently: true });
+            let last = 0;
+            const loop = (t) => {
+              if (!stream) return;
+              if (!alive()) { stop(); return; }
+              raf = requestAnimationFrame(loop);
+              if (t - last < 150 || video.readyState < 2 || !video.videoWidth) return;
+              last = t;
+              const k = Math.min(1, 640 / Math.max(video.videoWidth, video.videoHeight));
+              cv.width = Math.round(video.videoWidth * k); cv.height = Math.round(video.videoHeight * k);
+              ctx.drawImage(video, 0, 0, cv.width, cv.height);
+              const img = ctx.getImageData(0, 0, cv.width, cv.height);
+              const r = lib(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+              if (!r) return;
+              const code = codeFrom(r.data);
+              if (!code) { msg.textContent = 'Das ist kein WhatsUp-QR-Code.'; return; }
+              stop(); closeModal();
+              addCode(code);
+            };
+            raf = requestAnimationFrame(loop);
+          } catch (e) {
+            stop();
+            msg.textContent = e && e.name === 'NotAllowedError' ? '⚠️ Kein Zugriff auf die Kamera. Erlaube ihn in den Einstellungen.'
+              : e && e.message === 'jsQR' ? '⚠️ Der Scanner konnte nicht geladen werden.' : '⚠️ Keine Kamera gefunden.';
+          }
+        })();
+      });
+    }
+    // Geöffnet über einen QR-Link (…/whatsup/?add=CODE)?
+    function fromUrl() {
+      const code = codeFrom(location.search);
+      if (!code) return;
+      try { const u = new URL(location.href); u.searchParams.delete('add'); history.replaceState(null, '', u.pathname + u.search + u.hash); } catch {}
+      if (code === me.code) return;
+      if (isFriend(code)) { openChat('u:' + code); return; }
+      openModal((box) => {
+        box.appendChild(el('h3', '', '🤝 Freund hinzufügen?'));
+        box.appendChild(el('p', 'muted', `Möchtest du ${contacts[code] ? nameOf(code) + ' (' + code + ')' : 'den Code ' + code} als Freund hinzufügen?`));
+        box.appendChild(buttons(['Abbrechen', 'ghost', closeModal], ['Hinzufügen', 'primary', () => { closeModal(); addCode(code); }]));
+      });
+    }
+    $('qrBtn').onclick = showMine;
+    $('profQr').onclick = showMine;
+    $('scanBtn').onclick = scan;
+    return { showMine, scan, fromUrl, codeFrom };
+  })();
 
   // ---- Gelesen: Lesebestätigungen senden, wenn man den Chat wirklich sieht ----
   let readTimer = null;
@@ -2071,7 +2817,6 @@
     if (isGroup ? !groups[code] : !contacts[code]) return;
     $('chatAvatar').replaceChildren(chatAvatar(chatId, '', !isGroup));
     $('callBtns').classList.toggle('hidden', isGroup); // Anrufe nur im Einzelchat
-    $('pollBtn').classList.toggle('hidden', !isGroup); // Umfragen nur in Gruppen
     if (isGroup) {
       const g = groups[code];
       const on = others(g).filter(isOnline).length;
@@ -2141,7 +2886,9 @@
       else if (m.media && m.media.kind === 'video') div.appendChild(video.el(chatId, m));
       else if (m.media) div.appendChild(mediaEl(chatId, m));
       if (m.poll && !m.deleted) { div.classList.add('has-poll'); div.appendChild(pollEl(chatId, m)); }
-      else if (m.text) div.appendChild(el('div', 'text', m.text));
+      else if (m.game && !m.deleted) { div.classList.add('has-game'); div.appendChild(minigames.view(chatId, m)); }
+      else if (m.text) div.appendChild(mention.textEl(m));
+      if (!mine && !m.deleted && m.men && m.men.includes(me.code)) div.classList.add('mentioned');
       const meta = el('div', 'meta', (m.exp && !m.deleted ? '⏱ ' : '') + fmtTime(m.ts));
       if (m.exp && !m.deleted) meta.title = `Verschwindet am ${new Date(m.ts + m.exp * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
       if (mine && m.to && m.to.length && !m.deleted) {
@@ -2156,6 +2903,7 @@
       attachMsgMenu(div, chatId, m);
       box.appendChild(div);
     });
+    scheduled.renderBar(chatId);
     if (atBottom || box.dataset.chat !== chatId) box.scrollTop = box.scrollHeight;
     box.dataset.chat = chatId;
     scheduleReadReceipts();
@@ -2206,6 +2954,7 @@
     activeChat = chatId;
     setTimeout(() => voice.syncComposer(), 0);
     delete unread[chatId];
+    mention.mark(chatId, false);
     saveMeta();
     show('viewChat');
     render();
@@ -2220,23 +2969,27 @@
     stopTyping(activeChat);
     chatSearch = null; $('chatSearchBar').classList.add('hidden');
     activeChat = null;
-    clearReply(); closeMsgMenu(); video.close(); video.closePlayer();
+    clearReply(); closeMsgMenu(); video.close(); video.closePlayer(); mention.close();
     closeModal();
     show('viewList');
     render();
   }
 
   // ================= Modals =================
+  let onModalClose = null; // z. B. Kamera beim QR-Scannen ausschalten
+  function runModalClose() { const f = onModalClose; onModalClose = null; if (f) f(); }
   function openModal(build) {
+    runModalClose();
     const box = $('modalBox');
     box.replaceChildren();
+    box.classList.remove('recap-box');
     delete box.dataset.owner;
     box.classList.remove('modal-big'); $('modal').classList.remove('modal-big'); // nur die Gruppen-Info ist groß
     box.scrollTop = 0;
     build(box);
     $('modal').classList.remove('hidden');
   }
-  function closeModal() { $('modal').classList.add('hidden'); }
+  function closeModal() { $('modal').classList.add('hidden'); runModalClose(); }
 
   function checkList(codes) {
     const ul = el('ul', 'checklist');
@@ -6593,6 +7346,22 @@
       st.textContent = !enabled() ? 'Aus' : ready ? 'Aktiv · verschlüsselt' : 'Nicht erreichbar';
     }
 
+    // Kontakte ohne bekannten Namen („Nutzer ABC123“) über den Briefkasten nach ihrem Profil fragen.
+    // Höchstens einmal am Tag pro Kontakt; die Antwort kommt, sobald der andere WhatsUp öffnet.
+    function askMissingNames() {
+      const asked = store.load('nameAsked', {});
+      const today = new Date().toDateString();
+      let changed = false;
+      Object.entries(contacts).forEach(([code, c]) => {
+        if (!c.friend || isOnline(code) || !/^Nutzer [A-Z0-9]{6}$/.test(c.name || '') || asked[code] === today) return;
+        asked[code] = today;
+        changed = true;
+        send(code, { type: 'hreq' }).catch(() => {});
+      });
+      Object.keys(asked).forEach((code) => { if (!contacts[code]) { delete asked[code]; changed = true; } });
+      if (changed) store.save('nameAsked', asked);
+    }
+
     async function start() {
       if (!enabled()) { renderRelayStatus(); return; }
       try {
@@ -6603,7 +7372,7 @@
       renderRelayStatus();
       if (!ready) { setTimeout(start, 60000); return; }
       broadcastProfile();   // Freunde bekommen unsere Schlüssel
-      poll();
+      poll().then(askMissingNames);
       setupPush();
       saveNames();
       reportAchievements();
@@ -7196,6 +7965,11 @@
     setInterval(connectAll, RETRY_MS);
     relay.start();
     window.chatboxWindow.ready(); // jetzt dürfen Antworten aus Benachrichtigungen kommen
+    scheduled.tick();
+    setInterval(() => scheduled.tick(), 15 * 1000);
+    recap.check(); renderList();
+    setInterval(() => { recap.check(); if (view === 'viewList') renderList(); }, 60 * 60 * 1000);
+    qr.fromUrl();
   }
 
   applyTheme();

@@ -2030,7 +2030,7 @@
       b.onclick = (e) => { e.stopPropagation(); closeMsgMenu(); fn(); };
       menu.appendChild(b);
     };
-    act('Spiel', 'Tic-Tac-Toe oder Schere, Stein, Papier', '🎮', () => minigames.openNew(chatId));
+    act('Spiel', 'Tic-Tac-Toe, Schere, Stein, Papier oder Millionen-Quiz', '🎮', () => minigames.openNew(chatId));
     act('Nachricht planen', 'Später automatisch senden', '🕓', () => scheduled.openNew(chatId));
     if (chatId.startsWith('g:')) act('Umfrage', 'Alle in der Gruppe stimmen ab', '📊', openNewPoll);
     document.body.appendChild(back);
@@ -2275,16 +2275,19 @@
   })();
 
   // ================= Mini-Spiele im Chat =================
-  // Spiel-Nachricht mit game = { k: 'ttt' | 'rps', vs: Code des Gegners }. Züge gehen als Aktion an alle im Chat.
+  // Spiel-Nachricht mit game = { k: 'ttt' | 'rps', vs: Code des Gegners } oder { k: 'quiz' }. Züge gehen als Aktion an alle im Chat.
   // Tic-Tac-Toe: m.mv = { Zugnummer: Feld 0–8 }, abwechselnd, ✕ = wer gestartet hat.
   // Schere, Stein, Papier: m.mv = { Code: 0 Stein | 1 Papier | 2 Schere }. Die Wahl des anderen siehst du erst, wenn du selbst gewählt hast.
+  // Millionen-Quiz: Alle im Chat spielen für sich 15 Fragen, m.mv = { Code: erspielter Betrag }. Wer am meisten hat, gewinnt.
   const minigames = (() => {
-    const KINDS = { ttt: { icon: '❌⭕', name: 'Tic-Tac-Toe' }, rps: { icon: '✊✋✌️', name: 'Schere, Stein, Papier' } };
+    const KINDS = { ttt: { icon: '❌⭕', name: 'Tic-Tac-Toe' }, rps: { icon: '✊✋✌️', name: 'Schere, Stein, Papier' }, quiz: { icon: '💰', name: 'Millionen-Quiz' } };
     const RPS = ['✊', '✋', '✌️'], RPS_NAME = ['Stein', 'Papier', 'Schere'];
     const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
     const orphans = {}; // Züge, die vor der Spiel-Nachricht ankamen
     function valid(g, chatId, from) {
-      if (!g || typeof g !== 'object' || !Object.hasOwn(KINDS, g.k) || typeof g.vs !== 'string' || !CODE_RE.test(g.vs) || g.vs === from) return null;
+      if (!g || typeof g !== 'object' || !Object.hasOwn(KINDS, g.k)) return null;
+      if (g.k === 'quiz') return { k: 'quiz' };
+      if (typeof g.vs !== 'string' || !CODE_RE.test(g.vs) || g.vs === from) return null;
       if (chatId.startsWith('u:')) {
         if (g.vs !== (from === me.code ? chatId.slice(2) : me.code)) return null;
       } else {
@@ -2293,14 +2296,29 @@
       }
       return { k: g.k, vs: g.vs };
     }
-    const players = (m) => [m.from, m.game.vs];
-    function state(m) {
-      const [x, o] = players(m), mv = m.mv || {};
+    // Beim Quiz spielen alle mit, die im Chat sind
+    const chatMembers = (chatId) => (chatId.startsWith('u:') ? [me.code, chatId.slice(2)] : ((groups[chatId.slice(2)] || {}).members || []).slice());
+    const players = (m, chatId) => (m.game.k === 'quiz' ? (chatId ? chatMembers(chatId) : []) : [m.from, m.game.vs]);
+    function state(m, chatId) {
+      const mv = m.mv || {};
+      if (m.game.k === 'quiz') {
+        const ps = players(m, chatId), res = {};
+        for (const [c, v] of Object.entries(mv)) res[c] = v;
+        const done = ps.length > 1 && ps.every((c) => res[c] != null);
+        let winner = null;
+        if (done) {
+          const best = Math.max(...ps.map((c) => res[c]));
+          const top = ps.filter((c) => res[c] === best);
+          if (top.length === 1) winner = top[0];
+        }
+        return { done, winner, res, players: ps, turn: null };
+      }
+      const [x, o] = players(m);
       if (m.game.k === 'rps') {
         const a = mv[x], b = mv[o], done = a != null && b != null;
         // 1 schlägt 0 (Papier > Stein), 2 schlägt 1 (Schere > Papier), 0 schlägt 2 (Stein > Schere)
         const winner = done && a !== b ? ((a - b + 3) % 3 === 1 ? x : o) : null;
-        return { done, winner, picks: { [x]: a, [o]: b }, turn: null };
+        return { done, winner, picks: { [x]: a, [o]: b }, players: [x, o], turn: null };
       }
       const board = new Array(9).fill(null);
       let n = 0, winner = null, line = null;
@@ -2311,11 +2329,17 @@
         for (const l of LINES) if (board[l[0]] && board[l[0]] === board[l[1]] && board[l[1]] === board[l[2]]) { winner = board[l[0]]; line = l; }
       }
       const done = !!winner || n >= 9;
-      return { board, n, winner, line, done, turn: done ? null : (n % 2 ? o : x) };
+      return { board, n, winner, line, done, players: [x, o], turn: done ? null : (n % 2 ? o : x) };
     }
-    function apply(m, from, n, v) {
-      if (!m.game || m.deleted || !players(m).includes(from) || !Number.isInteger(v)) return false;
+    function apply(m, from, n, v, chatId) {
+      if (!m.game || m.deleted || !Number.isInteger(v)) return false;
       m.mv = m.mv || {};
+      if (m.game.k === 'quiz') {
+        if (!chatMembers(chatId).includes(from) || !(v === 0 || quiz.LADDER.includes(v)) || m.mv[from] != null) return false;
+        m.mv[from] = v;
+        return true;
+      }
+      if (!players(m).includes(from)) return false;
       if (m.game.k === 'rps') {
         if (v < 0 || v > 2 || m.mv[from] != null) return false;
         m.mv[from] = v;
@@ -2327,8 +2351,19 @@
       return true;
     }
     // Fertiges Spiel einmal für Statistik und Erfolge zählen
-    function settle(m) {
-      const s = state(m);
+    function settle(m, chatId) {
+      const s = state(m, chatId);
+      if (m.game.k === 'quiz') {
+        let changed = false;
+        if (!m.gc && s.res[me.code] != null) {
+          m.gc = 1; changed = true;
+          stats.gamesPlayed = (stats.gamesPlayed || 0) + 1;
+          if (s.res[me.code] === quiz.TOP) stats.quizMillion = (stats.quizMillion || 0) + 1;
+        }
+        if (s.done && !m.gw && s.winner === me.code) { m.gw = 1; changed = true; stats.gamesWon = (stats.gamesWon || 0) + 1; }
+        if (changed) { saveMeta(); checkAchievements(); }
+        return s;
+      }
       if (!s.done || m.gc || !players(m).includes(me.code)) return s;
       m.gc = 1;
       stats.gamesPlayed = (stats.gamesPlayed || 0) + 1;
@@ -2337,12 +2372,16 @@
       return s;
     }
     function play(chatId, m, v) {
-      const s = state(m);
-      if (s.done || !players(m).includes(me.code)) return;
       let n = 0;
-      if (m.game.k === 'ttt') { if (s.turn !== me.code || s.board[v] != null) return; n = s.n; }
-      if (!apply(m, me.code, n, v)) return;
-      settle(m);
+      if (m.game.k === 'quiz') {
+        if (!apply(m, me.code, 0, v, chatId)) return;
+      } else {
+        const s = state(m);
+        if (s.done || !players(m).includes(me.code)) return;
+        if (m.game.k === 'ttt') { if (s.turn !== me.code || s.board[v] != null) return; n = s.n; }
+        if (!apply(m, me.code, n, v)) return;
+      }
+      settle(m, chatId);
       saveChat(chatId); scheduleRender();
       sendAction(chatId, { act: 'move', id: m.id, n, v });
     }
@@ -2354,30 +2393,75 @@
         if (Object.keys(orphans).length < 200) (orphans[k] = orphans[k] || []).push({ from, n, v });
         return;
       }
-      if (!apply(m, from, n, v)) return;
-      const s = settle(m);
+      if (!apply(m, from, n, v, chatId)) return;
+      const s = settle(m, chatId);
       saveChat(chatId); scheduleRender();
-      if (from === me.code || !players(m).includes(me.code) || (activeChat === chatId && document.hasFocus())) return;
+      if (from === me.code || !s.players.includes(me.code) || (activeChat === chatId && document.hasFocus())) return;
       const who = nameOf(from);
       let text = null;
-      if (s.done) text = s.winner === me.code ? 'Du hast gewonnen! 🎉' : s.winner ? `${who} hat gewonnen` : 'Unentschieden 🤝';
+      if (m.game.k === 'quiz') {
+        text = `${who} hat ${quiz.money(v)} erspielt`;
+        if (s.done) text += s.winner === me.code ? ' – du hast gewonnen! 🎉' : s.winner ? ` – ${nameOf(s.winner)} gewinnt` : ' – Gleichstand 🤝';
+        else if (s.res[me.code] == null) text += ' – schaffst du mehr?';
+      } else if (s.done) text = s.winner === me.code ? 'Du hast gewonnen! 🎉' : s.winner ? `${who} hat gewonnen` : 'Unentschieden 🤝';
       else if (m.game.k === 'ttt' && s.turn === me.code) text = `${who} hat gezogen – du bist dran!`;
       else if (m.game.k === 'rps') text = `${who} hat gewählt – jetzt du!`;
-      if (text) notify(`🎮 ${KINDS[m.game.k].name}`, text, { chatId, icon: contacts[from] && contacts[from].avatar });
+      if (text) notify(`${KINDS[m.game.k].icon} ${KINDS[m.game.k].name}`, text, { chatId, icon: contacts[from] && contacts[from].avatar });
     }
     // Spiel-Nachricht ist da: früher angekommene Züge nachholen
     function adopt(chatId, m) {
       const k = chatId + '|' + m.id, list = orphans[k];
       if (!list) return;
       delete orphans[k];
-      list.forEach((x) => apply(m, x.from, x.n, x.v));
-      settle(m);
+      list.forEach((x) => apply(m, x.from, x.n, x.v, chatId));
+      settle(m, chatId);
     }
     const who = (c) => (c === me.code ? 'Du' : nameOf(c));
+    function againBtn(chatId, m) {
+      const again = el('button', 'game-again', '🔁 Nochmal');
+      again.type = 'button';
+      again.onclick = (e) => { e.stopPropagation(); start(chatId, m.game.k, m.from === me.code ? m.game.vs : m.from); };
+      return again;
+    }
+    function quizView(chatId, m, box) {
+      const s = state(m, chatId), meIn = s.players.includes(me.code);
+      if (meIn && s.res[me.code] == null && !m.deleted) queueMicrotask(() => quiz.repair(chatId, m));
+      box.appendChild(el('div', 'game-sub', 'Jeder spielt für sich 15 Fragen. Wer am meisten Geld hat, gewinnt!'));
+      const order = s.players.slice().sort((a, b) => (s.res[b] ?? -1) - (s.res[a] ?? -1));
+      const best = Math.max(-1, ...Object.values(s.res));
+      const ul = el('ul', 'quiz-board');
+      order.forEach((c) => {
+        const r = s.res[c];
+        const li = el('li', 'quiz-row' + (r != null && r === best && s.done ? ' win' : '') + (c === me.code ? ' self' : ''));
+        let val;
+        if (r != null) val = quiz.money(r);
+        else if (c === me.code && quiz.running(m.id)) val = `spielt … (Frage ${quiz.running(m.id)})`;
+        else val = 'noch nicht gespielt';
+        li.append(el('span', 'quiz-who', who(c)), el('span', 'quiz-val' + (r == null ? ' muted' : ''), val));
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+      if (meIn && s.res[me.code] == null && !m.deleted) {
+        const lvl = quiz.running(m.id);
+        const b = el('button', 'game-again quiz-play', lvl ? `▶ Weiterspielen (Frage ${lvl})` : '▶ Jetzt spielen');
+        b.type = 'button';
+        b.onclick = (e) => { e.stopPropagation(); quiz.open(chatId, m); };
+        box.appendChild(b);
+      }
+      let status = '';
+      if (s.done) status = s.winner ? (s.winner === me.code ? '🎉 Du hast gewonnen!' : `🏆 ${nameOf(s.winner)} hat gewonnen`) : '🤝 Gleichstand';
+      else {
+        const fin = s.players.filter((c) => s.res[c] != null).length;
+        if (fin) status = `${fin} von ${s.players.length} fertig`;
+      }
+      if (status) box.appendChild(el('div', 'game-status' + (s.done && s.winner === me.code ? ' won' : ''), status));
+      if (meIn && s.res[me.code] != null) box.appendChild(againBtn(chatId, m));
+    }
     function view(chatId, m) {
-      const s = state(m), [x, o] = players(m), meIn = players(m).includes(me.code);
       const box = el('div', 'game game-' + m.game.k);
       box.appendChild(el('div', 'game-title', `${KINDS[m.game.k].icon} ${KINDS[m.game.k].name}`));
+      if (m.game.k === 'quiz') { quizView(chatId, m, box); return box; }
+      const s = state(m), [x, o] = players(m), meIn = players(m).includes(me.code);
       if (m.game.k === 'ttt') {
         box.appendChild(el('div', 'game-sub', `${who(x)} ✕ · ${who(o)} ◯`));
         const grid = el('div', 'ttt');
@@ -2418,17 +2502,17 @@
       if (s.done) status = s.winner ? (s.winner === me.code ? '🎉 Du hast gewonnen!' : `🏆 ${nameOf(s.winner)} hat gewonnen`) : '🤝 Unentschieden';
       else if (m.game.k === 'ttt') status = s.turn === me.code ? '👉 Du bist dran' : `${nameOf(s.turn)} ist dran …`;
       if (status) box.appendChild(el('div', 'game-status' + (s.done && s.winner === me.code ? ' won' : ''), status));
-      if (s.done && meIn) {
-        const again = el('button', 'game-again', '🔁 Nochmal');
-        again.type = 'button';
-        again.onclick = (e) => { e.stopPropagation(); start(chatId, m.game.k, m.from === me.code ? m.game.vs : m.from); };
-        box.appendChild(again);
-      }
+      if (s.done && meIn) box.appendChild(againBtn(chatId, m));
       return box;
     }
     function start(chatId, k, vs) {
       const game = valid({ k, vs }, chatId, me.code);
       if (!game) return;
+      if (k === 'quiz') {
+        const whom = chatId.startsWith('u:') ? nameOf(chatId.slice(2)) : 'alle';
+        sendMessage(chatId, `💰 Millionen-Quiz: ${me.name} fordert ${whom} heraus! Wer erspielt mehr Geld? (Zum Mitspielen WhatsUp aktualisieren)`, null, { game, noReply: true });
+        return;
+      }
       sendMessage(chatId, `🎮 ${KINDS[k].name}: ${me.name} fordert ${nameOf(vs)} heraus! (Zum Mitspielen WhatsUp aktualisieren)`, null, { game, noReply: true });
     }
     function openNew(chatId) {
@@ -2438,17 +2522,24 @@
       openModal((box) => {
         box.appendChild(el('h3', '', '🎮 Spiel starten'));
         const kinds = el('div', 'game-kinds');
+        const pick = el('div', 'game-pick');
+        const quizNote = el('div', 'muted hidden', isGroup ? 'Alle in der Gruppe können mitspielen. Jeder löst die Fragen für sich.' : `Du und ${nameOf(vs)} spielt die Fragen jeweils für euch.`);
         Object.entries(KINDS).forEach(([k, d]) => {
           const b = el('button', 'game-kind' + (k === kind ? ' on' : ''));
           b.type = 'button';
           b.append(el('span', 'game-kind-ic', d.icon), el('span', 'game-kind-name', d.name));
-          b.onclick = () => { kind = k; kinds.querySelectorAll('.game-kind').forEach((x) => x.classList.toggle('on', x === b)); };
+          b.onclick = () => {
+            kind = k;
+            kinds.querySelectorAll('.game-kind').forEach((x) => x.classList.toggle('on', x === b));
+            pick.classList.toggle('hidden', k === 'quiz');
+            quizNote.classList.toggle('hidden', k !== 'quiz');
+          };
           kinds.appendChild(b);
         });
         box.appendChild(kinds);
         if (isGroup) {
-          box.appendChild(el('div', 'label', 'Gegen wen?'));
-          if (!opps.length) box.appendChild(el('div', 'muted', 'In dieser Gruppe ist sonst niemand.'));
+          pick.appendChild(el('div', 'label', 'Gegen wen?'));
+          if (!opps.length) pick.appendChild(el('div', 'muted', 'In dieser Gruppe ist sonst niemand.'));
           const ul = el('ul', 'members game-opps');
           opps.forEach((c) => {
             const ct = contacts[c];
@@ -2457,17 +2548,207 @@
             li.onclick = () => { vs = c; ul.querySelectorAll('li').forEach((y) => y.classList.toggle('on', y === li)); };
             ul.appendChild(li);
           });
-          box.appendChild(ul);
-        } else box.appendChild(el('div', 'muted', `Gegen ${nameOf(vs)}`));
+          pick.appendChild(ul);
+        } else pick.appendChild(el('div', 'muted', `Gegen ${nameOf(vs)}`));
+        box.append(pick, quizNote);
         const err = el('div', 'status err');
         box.appendChild(err);
         box.appendChild(buttons(['Abbrechen', 'ghost', closeModal], ['Herausfordern', 'primary', () => {
-          if (!vs) { err.textContent = 'Wähle, gegen wen du spielst.'; return; }
+          if (kind === 'quiz' && !opps.length) { err.textContent = 'In dieser Gruppe ist sonst niemand.'; return; }
+          if (kind !== 'quiz' && !vs) { err.textContent = 'Wähle, gegen wen du spielst.'; return; }
           closeModal();
           start(chatId, kind, vs);
         }]));
       });
     }
+
+    // ---------- Millionen-Quiz: eine Runde für sich spielen ----------
+    // Laufende Runden liegen in localStorage, damit Schliessen und neu Öffnen dieselbe Frage zeigt.
+    // Gestellte Fragen merkt sich das Gerät (quizSeen) und stellt sie erst wieder, wenn alle Fragen einer Stufe dran waren.
+    const quiz = (() => {
+      const LADDER = [50, 100, 200, 300, 500, 1000, 2000, 4000, 8000, 16000, 32000, 64000, 125000, 500000, 1000000];
+      const SAFE = [4, 9]; // 500 und 16 000 sind sicher
+      const TOP = LADDER[LADDER.length - 1];
+      const BANK = window.WHATSUP_QUIZ || [[], [], [], [], []];
+      const tierOf = (lvl) => Math.min(BANK.length - 1, Math.floor(lvl / 3));
+      const LETTERS = ['A', 'B', 'C', 'D'];
+      const money = (v) => v.toLocaleString('de-CH') + ' Fr.';
+      const hash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return h.toString(36); };
+      let runs = store.load('quizRuns', {});
+      let seen = new Set(store.load('quizSeen', []));
+      const saveRuns = () => store.save('quizRuns', runs);
+      const saveSeen = () => store.save('quizSeen', [...seen]);
+      const running = (id) => (runs[id] && !runs[id].end ? runs[id].lvl + 1 : 0);
+      const shuffle = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+      // Neue, noch nie gestellte Frage der passenden Stufe
+      function draw(run) {
+        const tier = tierOf(run.lvl), list = BANK[tier];
+        const used = new Set(run.asked || []);
+        let free = list.filter((q) => !seen.has(hash(q[0])) && !used.has(hash(q[0])));
+        if (!free.length) {
+          // Alle Fragen dieser Stufe gespielt: Stufe von vorne
+          list.forEach((q) => seen.delete(hash(q[0])));
+          free = list.filter((q) => !used.has(hash(q[0])));
+        }
+        const q = free[Math.floor(Math.random() * free.length)];
+        const id = hash(q[0]);
+        seen.add(id); saveSeen();
+        (run.asked = run.asked || []).push(id);
+        run.cur = { id, tier, order: shuffle([0, 1, 2, 3]), hide: [] };
+      }
+      const findQ = (cur) => BANK[cur.tier].find((q) => hash(q[0]) === cur.id);
+      function finish(chatId, m, run, amount) {
+        run.end = true; run.amount = amount;
+        saveRuns();
+        play(chatId, m, amount);
+      }
+      function safeAmount(lvl) { let a = 0; SAFE.forEach((i) => { if (lvl > i) a = LADDER[i]; }); return a; }
+      // Runde ist fertig, aber das Ergebnis fehlt im Chat (z. B. App direkt danach geschlossen): nachtragen statt neu spielen
+      function repair(chatId, m) {
+        const run = runs[m.id];
+        if (run && run.end && (!m.mv || m.mv[me.code] == null)) play(chatId, m, run.amount);
+      }
+      function open(chatId, m) {
+        if (m.mv && m.mv[me.code] != null) return;
+        if (runs[m.id] && runs[m.id].end) { repair(chatId, m); return; }
+        let run = runs[m.id];
+        if (!run || run.end) { run = runs[m.id] = { lvl: 0, jk: { ff: 1, aud: 1, tel: 1 }, ts: Date.now() }; draw(run); saveRuns(); }
+        // alte, nie beendete Runden aufräumen
+        for (const [id, r] of Object.entries(runs)) if (id !== m.id && Date.now() - (r.ts || 0) > 60 * 864e5) delete runs[id];
+        openModal((box) => {
+          box.classList.add('quiz-box');
+          onModalClose = scheduleRender; // Chat zeigt danach „Weiterspielen (Frage …)“
+          render(box, chatId, m, run, null);
+        });
+      }
+      // reveal = { pick, cur, lvl, next }: Auflösung der eben beantworteten Frage zeigen
+      function render(box, chatId, m, run, reveal) {
+        box.replaceChildren();
+        const head = el('div', 'quiz-head');
+        head.append(el('h3', '', '💰 Millionen-Quiz'));
+        const close = el('button', 'quiz-x', '✕');
+        close.type = 'button'; close.title = 'Schliessen (später weiterspielen)';
+        close.setAttribute('aria-label', 'Schliessen');
+        close.onclick = closeModal;
+        head.appendChild(close);
+        box.appendChild(head);
+        if (run.end && !reveal) {
+          const res = el('div', 'quiz-end');
+          res.append(el('div', 'quiz-end-big', run.amount === TOP ? '🏆' : run.amount ? '💰' : '😬'),
+            el('div', 'quiz-end-sum', money(run.amount)),
+            el('div', 'muted', run.amount === TOP ? 'Unglaublich – du hast die Million!' : run.won === false ? `Leider falsch. ${run.amount ? 'Die Sicherheitsstufe rettet dich.' : 'Du gehst leer aus.'}` : 'Du hast aufgehört und nimmst das Geld mit.'),
+            el('div', 'muted', 'Dein Ergebnis steht jetzt im Chat.'));
+          box.append(res, buttons(['Schliessen', 'primary', closeModal]));
+          return;
+        }
+        const lvl = reveal ? reveal.lvl : run.lvl, cur = reveal ? reveal.cur : run.cur;
+        const q = findQ(cur);
+        if (!q) {
+          if (reveal) { reveal.next(); return; }
+          draw(run); saveRuns(); render(box, chatId, m, run, null); return; // Frage gibt es nicht mehr: neue ziehen
+        }
+        // Leiter
+        const ladder = el('ol', 'quiz-ladder');
+        LADDER.forEach((v, i) => {
+          const li = el('li', (i === lvl ? 'cur' : i < lvl ? 'done' : '') + (SAFE.includes(i) ? ' safe' : '') + (Math.abs(i - lvl) <= 2 ? ' near' : ''));
+          li.append(el('span', 'quiz-ln', String(i + 1)), el('span', 'quiz-lv', money(v)));
+          ladder.prepend(li);
+        });
+        const body = el('div', 'quiz-body');
+        const main = el('div', 'quiz-main');
+        main.appendChild(el('div', 'quiz-meta', `Frage ${lvl + 1} von 15 · um ${money(LADDER[lvl])}`));
+        // Joker
+        const jk = el('div', 'quiz-jokers');
+        const visible = () => [0, 1, 2, 3].filter((i) => !cur.hide.includes(i));
+        const joker = (key, label, title, fn) => {
+          const b = el('button', 'quiz-joker' + (run.jk[key] ? '' : ' used'), label);
+          b.type = 'button'; b.title = title + (run.jk[key] ? '' : ' (schon benutzt)');
+          b.disabled = !run.jk[key] || !!reveal;
+          b.onclick = () => { if (!run.jk[key]) return; run.jk[key] = 0; fn(); saveRuns(); render(box, chatId, m, run, null); };
+          jk.appendChild(b);
+        };
+        joker('ff', '50:50', 'Zwei falsche Antworten entfernen', () => {
+          const wrong = shuffle(visible().filter((i) => i !== 0));
+          cur.hide.push(...wrong.slice(0, 2));
+          if (cur.aud) cur.hide.forEach((i) => { delete cur.aud[i]; });
+        });
+        joker('aud', '👥 Publikum', 'Das Publikum abstimmen lassen', () => {
+          const vis = visible();
+          const base = [0.72, 0.58, 0.46, 0.36, 0.3][cur.tier];
+          const share = { 0: Math.max(0.15, Math.min(0.92, base + (Math.random() - 0.5) * 0.3)) };
+          if (vis.length === 2) share[0] = Math.max(share[0], 0.4) + 0.1;
+          const rest = vis.filter((i) => i !== 0), w = rest.map(() => Math.random() + 0.15), sw = w.reduce((a, b) => a + b, 0);
+          rest.forEach((i, k) => { share[i] = (1 - share[0]) * (w[k] / sw); });
+          const pct = {};
+          vis.forEach((i) => { pct[i] = Math.round(share[i] * 100); });
+          pct[0] += 100 - vis.reduce((a, i) => a + pct[i], 0);
+          cur.aud = pct;
+        });
+        joker('tel', '📞 Anruf', 'Jemanden aus dem Chat anrufen', () => {
+          const friends = chatMembers(chatId).filter((c) => c !== me.code);
+          const name = friends.length ? nameOf(friends[Math.floor(Math.random() * friends.length)]) : 'Ein Freund';
+          const sure = [0.95, 0.85, 0.7, 0.55, 0.42][cur.tier];
+          const right = Math.random() < sure;
+          const pickI = right ? 0 : (shuffle(visible().filter((i) => i !== 0))[0] ?? 0);
+          const L = LETTERS[cur.order.indexOf(pickI)];
+          const conf = right && sure > 0.8 ? `Das ist ganz sicher ${L}!` : right ? `Ich glaube, es ist ${L}.` : `Hmm … ich würde auf ${L} tippen, aber sicher bin ich nicht.`;
+          cur.tel = `📞 ${name}: „${conf}“`;
+        });
+        main.appendChild(jk);
+        main.appendChild(el('div', 'quiz-q', q[0]));
+        const answers = el('div', 'quiz-answers');
+        cur.order.forEach((qi, pos) => {
+          const hidden = cur.hide.includes(qi);
+          const b = el('button', 'quiz-a');
+          b.type = 'button';
+          b.append(el('span', 'quiz-l', LETTERS[pos]), el('span', 'quiz-t', hidden ? '' : q[qi + 1]));
+          if (!hidden && cur.aud && cur.aud[qi] != null) {
+            b.classList.add('has-aud');
+            b.style.setProperty('--p', cur.aud[qi] + '%');
+            b.appendChild(el('span', 'quiz-pct', cur.aud[qi] + ' %'));
+          }
+          b.disabled = hidden || !!reveal;
+          if (hidden) b.classList.add('gone');
+          if (reveal) {
+            if (qi === 0) b.classList.add('right');
+            else if (qi === reveal.pick) b.classList.add('wrong');
+          }
+          b.onclick = () => answer(box, chatId, m, run, qi);
+          answers.appendChild(b);
+        });
+        main.appendChild(answers);
+        if (cur.tel) main.appendChild(el('div', 'quiz-tel', cur.tel));
+        if (reveal) {
+          const ok = reveal.pick === 0;
+          main.appendChild(el('div', 'quiz-verdict ' + (ok ? 'ok' : 'no'), ok ? `✅ Richtig! ${money(LADDER[lvl])}` : '❌ Leider falsch'));
+          main.appendChild(buttons([ok && !run.end ? 'Nächste Frage' : 'Ergebnis', 'primary', reveal.next]));
+        } else {
+          const walk = lvl ? LADDER[lvl - 1] : 0;
+          const stop = el('button', 'ghost quiz-stop', `Aufhören mit ${money(walk)}`);
+          stop.type = 'button';
+          stop.onclick = () => {
+            if (!stop.dataset.sure) { stop.dataset.sure = '1'; stop.textContent = 'Wirklich aufhören? Nochmal klicken'; return; }
+            run.won = true;
+            finish(chatId, m, run, walk);
+            render(box, chatId, m, run, null);
+          };
+          main.appendChild(stop);
+        }
+        body.append(main, ladder);
+        box.appendChild(body);
+      }
+      function answer(box, chatId, m, run, qi) {
+        if (run.end || !run.cur) return;
+        const ok = qi === 0, cur = run.cur, lvl = run.lvl;
+        // Ergebnis sofort speichern, damit Schliessen und neu Öffnen nichts rückgängig macht
+        if (!ok) { run.won = false; finish(chatId, m, run, safeAmount(lvl)); }
+        else if (lvl === LADDER.length - 1) { run.won = true; finish(chatId, m, run, TOP); }
+        else { run.lvl++; draw(run); saveRuns(); }
+        render(box, chatId, m, run, { pick: qi, cur, lvl, next: () => render(box, chatId, m, run, null) });
+      }
+      return { LADDER, TOP, money, running, open, repair };
+    })();
+
     return { valid, view, receive, adopt, openNew, state, name: (k) => (KINDS[k] || {}).name || 'Spiel' };
   })();
 
@@ -2488,9 +2769,9 @@
         for (const m of list) {
           if (m.sys || m.deleted || m.ts < start || m.ts >= end) continue;
           r.chats[chatId] = (r.chats[chatId] || 0) + 1;
-          if (m.game && (m.from === me.code || m.game.vs === me.code)) {
-            const s = minigames.state(m);
-            if (s.done) { r.games++; if (s.winner === me.code) r.wins++; }
+          if (m.game) {
+            const s = minigames.state(m, chatId);
+            if (s.done && s.players.includes(me.code)) { r.games++; if (s.winner === me.code) r.wins++; }
           }
           if (m.from !== me.code) { r.recv++; if (m.men && m.men.includes(me.code)) r.mentions++; continue; }
           r.sent++;
@@ -2982,7 +3263,7 @@
     runModalClose();
     const box = $('modalBox');
     box.replaceChildren();
-    box.classList.remove('recap-box');
+    box.classList.remove('recap-box', 'quiz-box');
     delete box.dataset.owner;
     box.classList.remove('modal-big'); $('modal').classList.remove('modal-big'); // nur die Gruppen-Info ist groß
     box.scrollTop = 0;

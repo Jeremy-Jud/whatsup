@@ -30,5 +30,6 @@ window.CHATBOX_ACHIEVEMENTS = [
   ['streak7', '☄️', 'Wochenserie', 'Chatte 7 Tage am Stück', 'maxStreak', 7],
   ['game1', '🎮', 'Spielkind', 'Spiele ein Mini-Spiel im Chat zu Ende', 'gamesPlayed', 1],
   ['win5', '🏅', 'Seriensieger', 'Gewinne 5 Mini-Spiele', 'gamesWon', 5],
-  ['all', '🏆', 'Komplettist', 'Schalte alle anderen Erfolge frei', 'unlockedOthers', 30],
+  ['quiz1m', '💰', 'Millionär', 'Gewinne im Millionen-Quiz die Million', 'quizMillion', 1],
+  ['all', '🏆', 'Komplettist', 'Schalte alle anderen Erfolge frei', 'unlockedOthers', 31],
 ].map(([id, icon, title, desc, stat, goal]) => ({ id, icon, title, desc, stat, goal }));

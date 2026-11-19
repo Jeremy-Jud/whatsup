@@ -1,0 +1,346 @@
+/* WhatsUp – Design „Liquid Glass“
+   Glas, das Licht bricht: schwebende Leisten über einem lebendigen Farbhintergrund.
+   Folgt Hell/Dunkel (wie Classic). Die echte Lichtbrechung am Glasrand kommt aus
+   liquid-glass.js (SVG-Filter, nur Chromium/Windows-App); sonst Milchglas mit Unschärfe. */
+
+/* ---------------- Farben: Hell ---------------- */
+:root[data-design="liquid"], .design-opt[data-design="liquid"] {
+  color-scheme: light;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --bg: #eef2fb; --fg: #0b0d14; --muted: #5b6377; --line: rgba(20, 28, 60, .10); --soft: rgba(255, 255, 255, .46);
+  --accent: #0a7cff; --on-accent: #ffffff;
+  /* Glas */
+  --lg-tint: rgba(255, 255, 255, .34);
+  --lg-tint-2: rgba(255, 255, 255, .62);
+  --lg-solid: rgba(248, 250, 255, .93);
+  --lg-bubble: rgba(255, 255, 255, .72);
+  --lg-hi: rgba(255, 255, 255, .95);
+  --lg-hi-2: rgba(255, 255, 255, .55);
+  --lg-lo: rgba(255, 255, 255, .22);
+  --lg-edge: rgba(255, 255, 255, .55);
+  --lg-glow: rgba(255, 255, 255, .55);
+  --lg-shadow: 0 14px 34px -12px rgba(28, 40, 96, .32), 0 3px 10px -2px rgba(28, 40, 96, .10);
+  --lg-shadow-sm: 0 6px 16px -8px rgba(28, 40, 96, .30);
+  --lg-me: linear-gradient(155deg, #48a8ff 0%, #0a7cff 48%, #5a5cff 100%);
+  --lg-me-shadow: 0 8px 18px -10px rgba(10, 110, 255, .75);
+  --lg-veil: rgba(244, 247, 255, .18);
+  /* Hintergrund */
+  --pattern:
+    radial-gradient(42% 36% at 10% 12%, #8fc8ff 0%, rgba(143, 200, 255, 0) 70%),
+    radial-gradient(40% 34% at 92% 8%, #ffb4da 0%, rgba(255, 180, 218, 0) 70%),
+    radial-gradient(48% 40% at 84% 92%, #ffd393 0%, rgba(255, 211, 147, 0) 70%),
+    radial-gradient(44% 40% at 6% 90%, #9cf0d4 0%, rgba(156, 240, 212, 0) 70%),
+    radial-gradient(55% 48% at 50% 52%, #cdbfff 0%, rgba(205, 191, 255, 0) 75%);
+  --lg-blob-1: radial-gradient(closest-side, rgba(64, 156, 255, .75), rgba(64, 156, 255, 0));
+  --lg-blob-2: radial-gradient(closest-side, rgba(255, 96, 178, .55), rgba(255, 96, 178, 0));
+  --lg-blob-3: radial-gradient(closest-side, rgba(255, 196, 92, .6), rgba(255, 196, 92, 0));
+  --lg-blob-4: radial-gradient(closest-side, rgba(70, 225, 190, .55), rgba(70, 225, 190, 0));
+}
+
+/* ---------------- Farben: Dunkel ---------------- */
+@media (prefers-color-scheme: dark) {
+  :root[data-design="liquid"]:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #090a12; --fg: #f3f5ff; --muted: #9aa2bc; --line: rgba(255, 255, 255, .10); --soft: rgba(255, 255, 255, .08);
+    --accent: #3d9bff; --on-accent: #ffffff;
+    --lg-tint: rgba(255, 255, 255, .07);
+    --lg-tint-2: rgba(36, 38, 56, .66);
+    --lg-solid: rgba(22, 24, 36, .94);
+    --lg-bubble: rgba(255, 255, 255, .11);
+    --lg-hi: rgba(255, 255, 255, .55);
+    --lg-hi-2: rgba(255, 255, 255, .22);
+    --lg-lo: rgba(255, 255, 255, .06);
+    --lg-edge: rgba(255, 255, 255, .14);
+    --lg-glow: rgba(255, 255, 255, .10);
+    --lg-shadow: 0 16px 40px -12px rgba(0, 0, 0, .75), 0 3px 10px -2px rgba(0, 0, 0, .35);
+    --lg-shadow-sm: 0 6px 18px -8px rgba(0, 0, 0, .7);
+    --lg-me: linear-gradient(155deg, #3d9bff 0%, #1f6bff 50%, #7a4dff 100%);
+    --lg-me-shadow: 0 10px 22px -10px rgba(61, 120, 255, .8);
+    --lg-veil: rgba(6, 7, 14, .38);
+    --pattern:
+      radial-gradient(42% 36% at 10% 10%, rgba(58, 92, 255, .55) 0%, rgba(58, 92, 255, 0) 70%),
+      radial-gradient(40% 34% at 94% 16%, rgba(178, 62, 255, .45) 0%, rgba(178, 62, 255, 0) 70%),
+      radial-gradient(48% 40% at 82% 94%, rgba(255, 66, 142, .36) 0%, rgba(255, 66, 142, 0) 70%),
+      radial-gradient(44% 40% at 4% 90%, rgba(0, 196, 204, .34) 0%, rgba(0, 196, 204, 0) 70%);
+    --lg-blob-1: radial-gradient(closest-side, rgba(52, 110, 255, .6), rgba(52, 110, 255, 0));
+    --lg-blob-2: radial-gradient(closest-side, rgba(190, 70, 255, .5), rgba(190, 70, 255, 0));
+    --lg-blob-3: radial-gradient(closest-side, rgba(255, 70, 140, .38), rgba(255, 70, 140, 0));
+    --lg-blob-4: radial-gradient(closest-side, rgba(0, 210, 210, .4), rgba(0, 210, 210, 0));
+  }
+}
+:root[data-design="liquid"][data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #090a12; --fg: #f3f5ff; --muted: #9aa2bc; --line: rgba(255, 255, 255, .10); --soft: rgba(255, 255, 255, .08);
+  --accent: #3d9bff; --on-accent: #ffffff;
+  --lg-tint: rgba(255, 255, 255, .07);
+  --lg-tint-2: rgba(36, 38, 56, .66);
+  --lg-solid: rgba(22, 24, 36, .94);
+  --lg-bubble: rgba(255, 255, 255, .11);
+  --lg-hi: rgba(255, 255, 255, .55);
+  --lg-hi-2: rgba(255, 255, 255, .22);
+  --lg-lo: rgba(255, 255, 255, .06);
+  --lg-edge: rgba(255, 255, 255, .14);
+  --lg-glow: rgba(255, 255, 255, .10);
+  --lg-shadow: 0 16px 40px -12px rgba(0, 0, 0, .75), 0 3px 10px -2px rgba(0, 0, 0, .35);
+  --lg-shadow-sm: 0 6px 18px -8px rgba(0, 0, 0, .7);
+  --lg-me: linear-gradient(155deg, #3d9bff 0%, #1f6bff 50%, #7a4dff 100%);
+  --lg-me-shadow: 0 10px 22px -10px rgba(61, 120, 255, .8);
+  --lg-veil: rgba(6, 7, 14, .38);
+  --pattern:
+    radial-gradient(42% 36% at 10% 10%, rgba(58, 92, 255, .55) 0%, rgba(58, 92, 255, 0) 70%),
+    radial-gradient(40% 34% at 94% 16%, rgba(178, 62, 255, .45) 0%, rgba(178, 62, 255, 0) 70%),
+    radial-gradient(48% 40% at 82% 94%, rgba(255, 66, 142, .36) 0%, rgba(255, 66, 142, 0) 70%),
+    radial-gradient(44% 40% at 4% 90%, rgba(0, 196, 204, .34) 0%, rgba(0, 196, 204, 0) 70%);
+  --lg-blob-1: radial-gradient(closest-side, rgba(52, 110, 255, .6), rgba(52, 110, 255, 0));
+  --lg-blob-2: radial-gradient(closest-side, rgba(190, 70, 255, .5), rgba(190, 70, 255, 0));
+  --lg-blob-3: radial-gradient(closest-side, rgba(255, 70, 140, .38), rgba(255, 70, 140, 0));
+  --lg-blob-4: radial-gradient(closest-side, rgba(0, 210, 210, .4), rgba(0, 210, 210, 0));
+}
+
+/* ---------------- Lebendiger Hintergrund ---------------- */
+:root[data-design="liquid"] body:not(.popup-body) { position: relative; letter-spacing: -.005em; }
+/* Zwei Ebenen mit Farbwolken, die langsam treiben (nur transform → läuft auf der Grafikkarte) */
+:root[data-design="liquid"] body:not(.popup-body)::before,
+:root[data-design="liquid"] body:not(.popup-body)::after {
+  content: ''; position: fixed; z-index: -1; pointer-events: none; inset: -25%;
+  background-repeat: no-repeat;
+}
+:root[data-design="liquid"] body:not(.popup-body)::before {
+  background-image: var(--lg-blob-1), var(--lg-blob-2);
+  background-size: 55% 50%, 50% 46%;
+  background-position: 18% 22%, 82% 70%;
+  animation: lg-drift-a 38s ease-in-out infinite alternate;
+}
+:root[data-design="liquid"] body:not(.popup-body)::after {
+  background-image: var(--lg-blob-3), var(--lg-blob-4), linear-gradient(var(--lg-veil), var(--lg-veil));
+  background-size: 48% 44%, 46% 44%, 100% 100%;
+  background-position: 78% 18%, 20% 80%, 0 0;
+  animation: lg-drift-b 46s ease-in-out infinite alternate;
+}
+@keyframes lg-drift-a {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
+  50% { transform: translate3d(6%, 4%, 0) rotate(12deg) scale(1.08); }
+  100% { transform: translate3d(-5%, 7%, 0) rotate(-8deg) scale(.96); }
+}
+@keyframes lg-drift-b {
+  0% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1.05); }
+  50% { transform: translate3d(-7%, -3%, 0) rotate(-14deg) scale(.95); }
+  100% { transform: translate3d(5%, -6%, 0) rotate(10deg) scale(1.1); }
+}
+/* Ruhe, wenn das Fenster nicht aktiv ist oder Bewegung reduziert werden soll */
+:root[data-design="liquid"].lg-idle body::before, :root[data-design="liquid"].lg-idle body::after { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) {
+  :root[data-design="liquid"] body::before, :root[data-design="liquid"] body::after { animation: none; }
+}
+
+/* ---------------- Glas-Bausteine ---------------- */
+/* Schwebende Leisten: Tab-Leiste, Chat-Kopf, Eingabe */
+:root[data-design="liquid"] :is(#tabbar, .chatbar, .composer, .chat-search) {
+  position: relative; border: 0; border-radius: 999px; isolation: isolate;
+  background:
+    radial-gradient(120% 140% at 50% -40%, var(--lg-glow), transparent 55%),
+    var(--lg-tint);
+  -webkit-backdrop-filter: blur(16px) saturate(190%);
+  backdrop-filter: var(--lg-bf, blur(16px) saturate(190%) brightness(1.04));
+  box-shadow: var(--lg-shadow), inset 0 1px 0 var(--lg-hi), inset 0 -1px 1px var(--lg-lo), inset 0 0 0 .5px var(--lg-edge);
+}
+/* Glanzkante: hell oben links und unten rechts, wie Licht auf gebogenem Glas */
+:root[data-design="liquid"] :is(#tabbar, .chatbar, .composer, .chat-search, .lg-pill, .personalize, .msg-menu)::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 5;
+  padding: 1.2px;
+  background: linear-gradient(135deg, var(--lg-hi) 0%, transparent 26%, transparent 64%, var(--lg-hi-2) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+}
+
+/* Karten und Menüs: kräftigeres Glas */
+:root[data-design="liquid"] :is(.msg-menu, .modal-box, .mention-box, .emoji-panel, .reel-sheet) {
+  background: var(--lg-tint-2); border: 0;
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  backdrop-filter: blur(28px) saturate(190%);
+  box-shadow: var(--lg-shadow), inset 0 1px 0 var(--lg-hi), inset 0 0 0 .5px var(--lg-edge);
+}
+:root[data-design="liquid"] .msg-menu { border-radius: 22px; }
+:root[data-design="liquid"] .modal-box { border-radius: 28px; }
+:root[data-design="liquid"] .modal { background: color-mix(in srgb, var(--bg) 28%, transparent); -webkit-backdrop-filter: blur(10px) saturate(140%); backdrop-filter: blur(10px) saturate(140%); }
+:root[data-design="liquid"] .modal-box.modal-big .sticky-actions { background: var(--lg-solid); border-top-color: var(--line); }
+:root[data-design="liquid"] .msg-menu-back { background: color-mix(in srgb, var(--bg) 18%, transparent); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+
+/* Flächen, die sonst deckend sind */
+:root[data-design="liquid"] :is(.personalize, .chall-card, .recap-bar) {
+  position: relative; border: 0; border-radius: 22px;
+  background: var(--lg-tint);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: var(--lg-shadow-sm), inset 0 1px 0 var(--lg-hi), inset 0 0 0 .5px var(--lg-edge);
+}
+:root[data-design="liquid"] .personalize summary:hover { background: var(--lg-lo); }
+:root[data-design="liquid"] .pers-body { border-top-color: var(--line); }
+:root[data-design="liquid"] :is(.drop-hint, .viewer, .recbar) { background: var(--lg-solid); }
+:root[data-design="liquid"] .recbar { border-radius: inherit; }
+:root[data-design="liquid"] :is(#viewReels, .reel-top, .reel) { background: transparent; }
+
+/* ---------------- Titelleiste ---------------- */
+:root[data-design="liquid"] .titlebar { background: transparent; }
+:root[data-design="liquid"] .title { font-weight: 700; font-size: 13.5px; letter-spacing: -.01em; }
+:root[data-design="liquid"] .ic { border-radius: 999px; }
+:root[data-design="liquid"] .ic:hover, :root[data-design="liquid"] .ic.active { background: var(--soft); box-shadow: inset 0 1px 0 var(--lg-hi-2), inset 0 0 0 .5px var(--lg-edge); }
+
+/* ---------------- Tab-Leiste: schwebende Kapsel ---------------- */
+:root[data-design="liquid"] #tabbar {
+  position: absolute; z-index: 6; left: 14px; right: 14px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  padding: 5px; justify-content: space-between;
+}
+:root[data-design="liquid"] .tab { position: relative; z-index: 2; max-width: none; border-radius: 999px; padding: 5px 0 4px; transition: color .3s; }
+:root[data-design="liquid"] .tab.active { color: var(--accent); background: var(--soft); }
+:root[data-design="liquid"] #tabbar.has-pill .tab.active { background: none; }
+:root[data-design="liquid"] .tab.active .tab-ic .avatar { box-shadow: 0 0 0 1.5px var(--accent); }
+:root[data-design="liquid"] .tab:active .tab-ic { transform: scale(.88); }
+:root[data-design="liquid"] .tab-ic { transition: transform .25s cubic-bezier(.34, 1.56, .64, 1); }
+:root[data-design="liquid"] .tab-dot, :root[data-design="liquid"] .tab-badge { box-shadow: 0 0 0 2px var(--lg-solid); }
+/* Gleitender Tropfen hinter dem aktiven Tab (liquid-glass.js) */
+.lg-pill { display: none; }
+:root[data-design="liquid"] .lg-pill {
+  display: block; position: absolute; z-index: 1; top: 5px; bottom: 5px; left: 0; width: 0;
+  border-radius: 999px; pointer-events: none; will-change: transform, width;
+  background:
+    radial-gradient(100% 120% at 50% -30%, var(--lg-hi-2), transparent 60%),
+    color-mix(in srgb, var(--accent) 13%, var(--soft));
+  box-shadow: 0 4px 14px -6px color-mix(in srgb, var(--accent) 55%, transparent), inset 0 1px 0 var(--lg-hi), inset 0 -1px 1px var(--lg-lo), inset 0 0 0 .5px var(--lg-edge);
+}
+
+/* Platz unten, damit nichts unter der Tab-Leiste verschwindet */
+:root[data-design="liquid"] :is(#chatList, #statusList, .settings) { padding-bottom: 92px; }
+:root[data-design="liquid"] #viewReels { padding-bottom: 80px; }
+:root[data-design="liquid"] .reel-feed { border-radius: 22px; }
+/* Liste läuft oben weich aus */
+:root[data-design="liquid"] #chatList, :root[data-design="liquid"] .settings {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 14px);
+}
+
+/* ---------------- Chatliste ---------------- */
+:root[data-design="liquid"] .list li { border-radius: 18px; transition: background .2s, box-shadow .2s, transform .2s; }
+:root[data-design="liquid"] .list li:hover { background: var(--soft); box-shadow: inset 0 1px 0 var(--lg-hi-2), inset 0 0 0 .5px var(--lg-edge); }
+:root[data-design="liquid"] .list li:active { transform: scale(.985); }
+:root[data-design="liquid"] .list li.search-head:hover { background: none; box-shadow: none; }
+:root[data-design="liquid"] .badge { background: var(--accent); box-shadow: 0 3px 8px -3px color-mix(in srgb, var(--accent) 80%, transparent), inset 0 1px 0 rgba(255, 255, 255, .45); }
+:root[data-design="liquid"] .listhead { font-weight: 600; }
+
+/* ---------------- Felder & Knöpfe ---------------- */
+:root[data-design="liquid"] :is(input, textarea) {
+  background: var(--soft); border-radius: 999px;
+  -webkit-backdrop-filter: blur(12px) saturate(170%);
+  backdrop-filter: blur(12px) saturate(170%);
+  box-shadow: inset 0 1px 0 var(--lg-hi-2), inset 0 0 0 .5px var(--lg-edge), 0 2px 8px -6px rgba(0, 0, 0, .3);
+  transition: box-shadow .2s;
+}
+:root[data-design="liquid"] textarea { border-radius: 18px; }
+:root[data-design="liquid"] :is(input, textarea):focus { box-shadow: inset 0 1px 0 var(--lg-hi-2), 0 0 0 1.5px color-mix(in srgb, var(--accent) 70%, transparent), 0 0 18px -4px color-mix(in srgb, var(--accent) 60%, transparent); }
+:root[data-design="liquid"] :is(input[type="checkbox"], input[type="radio"], input[type="range"], input[type="file"]) { -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
+:root[data-design="liquid"] :is(button.primary, .primary-pill) {
+  background: var(--lg-me); color: #fff; border-radius: 999px;
+  box-shadow: var(--lg-me-shadow), inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 -1px 1px rgba(0, 0, 0, .12);
+  transition: transform .2s cubic-bezier(.34, 1.56, .64, 1), filter .2s;
+}
+:root[data-design="liquid"] :is(button.primary, .primary-pill):hover { opacity: 1; filter: brightness(1.08) saturate(1.1); }
+:root[data-design="liquid"] :is(button.primary, .primary-pill, .send):active { transform: scale(.94); }
+:root[data-design="liquid"] .send {
+  background: var(--lg-me);
+  box-shadow: var(--lg-me-shadow), inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 1px rgba(0, 0, 0, .15);
+  transition: transform .2s cubic-bezier(.34, 1.56, .64, 1), filter .2s;
+}
+:root[data-design="liquid"] .send:hover { opacity: 1; filter: brightness(1.1); }
+:root[data-design="liquid"] .segmented {
+  background: var(--soft); border-radius: 999px; padding: 3px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, .06), inset 0 0 0 .5px var(--lg-edge);
+}
+:root[data-design="liquid"] .segmented button { border-radius: 999px; transition: background .25s, color .25s; }
+:root[data-design="liquid"] .segmented button.active { background: var(--lg-tint-2); box-shadow: var(--lg-shadow-sm), inset 0 1px 0 var(--lg-hi), inset 0 0 0 .5px var(--lg-edge); }
+/* Schalter wie auf dem iPhone */
+:root[data-design="liquid"] .switch { width: 42px; height: 24px; border-radius: 999px; background: rgba(120, 120, 128, .26); box-shadow: inset 0 0 0 .5px var(--lg-edge); }
+:root[data-design="liquid"] .switch:checked { background: #34c759; }
+:root[data-design="liquid"] .switch::after { top: 2px; left: 2px; width: 20px; height: 20px; box-shadow: 0 3px 8px rgba(0, 0, 0, .18), 0 1px 1px rgba(0, 0, 0, .12), inset 0 0 0 .5px rgba(0, 0, 0, .04); transition: transform .3s cubic-bezier(.34, 1.56, .64, 1), width .2s; }
+:root[data-design="liquid"] .switch:checked::after { transform: translateX(18px); }
+:root[data-design="liquid"] .switch:active::after { width: 25px; }
+:root[data-design="liquid"] .switch:checked:active::after { transform: translateX(13px); }
+
+/* ---------------- Chat: Leisten schweben über den Nachrichten ---------------- */
+.chat-top, .chat-bottom { display: contents; }
+:root[data-design="liquid"] #viewChat .chat-top {
+  display: flex; flex-direction: column; gap: 6px;
+  position: absolute; z-index: 4; top: 2px; left: 10px; right: 10px; pointer-events: none;
+}
+:root[data-design="liquid"] #viewChat .chat-bottom {
+  display: flex; flex-direction: column; gap: 6px;
+  position: absolute; z-index: 4; left: 10px; right: 10px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px)); pointer-events: none;
+}
+:root[data-design="liquid"] :is(.chat-top, .chat-bottom) > * { pointer-events: auto; }
+:root[data-design="liquid"] .messages {
+  padding-top: calc(var(--lg-top, 62px) + 10px);
+  padding-bottom: calc(var(--lg-bottom, 58px) + 12px);
+  scroll-padding-top: calc(var(--lg-top, 62px) + 10px);
+}
+:root[data-design="liquid"] .chatbar { padding: 0 6px 0 0; }
+:root[data-design="liquid"] .chathead { padding: 6px 10px 6px 7px; border-radius: 999px; }
+:root[data-design="liquid"] .chat-search { padding: 4px 6px 4px 6px; border-bottom: 0; }
+:root[data-design="liquid"] .chat-search input { background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root[data-design="liquid"] .composer { padding: 5px; gap: 0; border-radius: 26px; }
+:root[data-design="liquid"] .composer input {
+  background: transparent; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none;
+  padding: 8px 10px; margin: 0 2px;
+}
+:root[data-design="liquid"] .composer .send { width: 34px; height: 34px; }
+:root[data-design="liquid"] .emoji-panel { border-radius: 24px; overflow: hidden; height: 220px; }
+:root[data-design="liquid"] :is(.reply-bar, .sched-bar) {
+  margin: 0; border-radius: 18px; background: var(--lg-tint-2); border-left: 0;
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: var(--lg-shadow-sm), inset 3px 0 0 var(--accent), inset 0 1px 0 var(--lg-hi), inset 0 0 0 .5px var(--lg-edge);
+}
+:root[data-design="liquid"] .mention-box { margin: 0; border-radius: 20px; }
+
+/* ---------------- Nachrichten ---------------- */
+:root[data-design="liquid"] .msg { border-radius: 20px; }
+:root[data-design="liquid"] .msg.them {
+  background: var(--lg-bubble);
+  box-shadow: 0 4px 14px -10px rgba(0, 0, 0, .35), inset 0 1px 0 var(--lg-hi-2), inset 0 0 0 .5px var(--lg-edge);
+}
+:root[data-design="liquid"] .msg.me {
+  background: var(--lg-me); color: #fff;
+  box-shadow: var(--lg-me-shadow), inset 0 1px 0 rgba(255, 255, 255, .38), inset 0 -1px 1px rgba(0, 0, 0, .10);
+}
+:root[data-design="liquid"] :is(.msg.big, .msg.has-media, .msg.sticker, .msg.deleted) { background: none; box-shadow: none; }
+:root[data-design="liquid"] .msg.deleted { border-color: var(--line); }
+:root[data-design="liquid"] .msg.menu-on { box-shadow: 0 0 0 2px var(--accent), 0 10px 30px -8px rgba(0, 0, 0, .4); }
+:root[data-design="liquid"] .react-chip { background: var(--lg-tint-2); border: 0; border-radius: 999px; box-shadow: var(--lg-shadow-sm), inset 0 0 0 .5px var(--lg-edge); }
+:root[data-design="liquid"] .react-chip.mine { box-shadow: 0 0 0 1.5px var(--accent), var(--lg-shadow-sm); }
+:root[data-design="liquid"] .quote { border-radius: 12px; }
+
+/* ---------------- Einstellungen ---------------- */
+:root[data-design="liquid"] .settings h2 { font-size: 12px; font-weight: 700; letter-spacing: .02em; }
+:root[data-design="liquid"] .frame-opt.active, :root[data-design="liquid"] .frame-opt:hover { background: var(--soft); }
+
+/* ---------------- Vorschau-Karte in der Auswahl ---------------- */
+.design-opt[data-design="liquid"] {
+  --me: var(--lg-me);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .7), 0 6px 16px -10px rgba(40, 60, 140, .5);
+  background: var(--pattern), linear-gradient(135deg, #dde8ff, #f3e6ff);
+}
+.design-opt[data-design="liquid"].active { box-shadow: 0 0 0 2px var(--sel), 0 8px 20px -10px var(--sel); }
+.design-opt[data-design="liquid"] .dz-b1 {
+  background: radial-gradient(120% 140% at 50% -40%, rgba(255, 255, 255, .9), transparent 55%), rgba(255, 255, 255, .35);
+  -webkit-backdrop-filter: blur(6px) saturate(180%); backdrop-filter: blur(6px) saturate(180%);
+  box-shadow: 0 3px 8px -4px rgba(40, 60, 140, .35), inset 0 1px 0 #fff, inset 0 0 0 .5px rgba(255, 255, 255, .8);
+}
+.design-opt[data-design="liquid"]::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, .55) 45%, transparent 60%);
+  transform: translateX(-120%); transition: transform .9s cubic-bezier(.2, .8, .2, 1);
+}
+.design-opt[data-design="liquid"]:hover::before { transform: translateX(120%); }
+
+/* „Noch keine Chats“ nicht hinter der Tab-Leiste */
+:root[data-design="liquid"] #emptyList { padding-bottom: 120px; }

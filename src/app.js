@@ -2596,23 +2596,28 @@
         (run.asked = run.asked || []).push(id);
         run.cur = { id, tier, order: shuffle([0, 1, 2, 3]), hide: [] };
       }
-      const findQ = (cur) => BANK[cur.tier].find((q) => hash(q[0]) === cur.id);
+      const findQ = (cur) => (cur && BANK[cur.tier] ? BANK[cur.tier].find((q) => hash(q[0]) === cur.id) : null);
       function finish(chatId, m, run, amount) {
         run.end = true; run.amount = amount;
         saveRuns();
-        play(chatId, m, amount);
+        // Senden darf die Anzeige nie blockieren: Ein Fehler hier liess sonst die Antworten „eingefroren“ zurück
+        // (Runde schon beendet, Auflösung nie gezeigt). Fehlt das Ergebnis danach im Chat, trägt repair() es nach.
+        try { play(chatId, m, amount); } catch (e) { console.error('Quiz-Ergebnis senden', e); }
       }
       function safeAmount(lvl) { let a = 0; SAFE.forEach((i) => { if (lvl > i) a = LADDER[i]; }); return a; }
       // Runde ist fertig, aber das Ergebnis fehlt im Chat (z. B. App direkt danach geschlossen): nachtragen statt neu spielen
       function repair(chatId, m) {
         const run = runs[m.id];
-        if (run && run.end && (!m.mv || m.mv[me.code] == null)) play(chatId, m, run.amount);
+        if (run && run.end && (!m.mv || m.mv[me.code] == null)) {
+          try { play(chatId, m, run.amount); } catch (e) { console.error('Quiz-Ergebnis nachtragen', e); }
+        }
       }
       function open(chatId, m) {
         if (m.mv && m.mv[me.code] != null) return;
         if (runs[m.id] && runs[m.id].end) { repair(chatId, m); return; }
         let run = runs[m.id];
         if (!run || run.end) { run = runs[m.id] = { lvl: 0, jk: { ff: 1, aud: 1, tel: 1 }, ts: Date.now() }; draw(run); saveRuns(); }
+        else if (!run.cur || !Array.isArray(run.cur.order) || !Array.isArray(run.cur.hide)) { draw(run); saveRuns(); } // kaputter Spielstand: neue Frage statt toter Knöpfe
         // alte, nie beendete Runden aufräumen
         for (const [id, r] of Object.entries(runs)) if (id !== m.id && Date.now() - (r.ts || 0) > 60 * 864e5) delete runs[id];
         openModal((box) => {
@@ -2738,7 +2743,7 @@
         box.appendChild(body);
       }
       function answer(box, chatId, m, run, qi) {
-        if (run.end || !run.cur) return;
+        if (run.end || !run.cur) { render(box, chatId, m, run, null); return; } // nie stumm ignorieren, sonst wirkt der Knopf tot
         const ok = qi === 0, cur = run.cur, lvl = run.lvl;
         // Ergebnis sofort speichern, damit Schliessen und neu Öffnen nichts rückgängig macht
         if (!ok) { run.won = false; finish(chatId, m, run, safeAmount(lvl)); }

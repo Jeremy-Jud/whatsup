@@ -1,0 +1,207 @@
+/* WhatsUp – Designs (Einstellungen → Personalisieren → Design).
+   Jedes Design setzt dieselben Farb-Variablen wie style.css. Die Selektoren gelten für
+   <html data-design="…"> und für die Vorschau-Karten (.design-opt), damit jede Karte
+   genau so aussieht wie das Design selbst. „Classic“ ist das bisherige Aussehen mit Hell/Dunkel. */
+
+:root { --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; --pattern: none; }
+:root[data-design]:not([data-design="classic"]) body:not(.popup-body) { font-family: var(--font); background: var(--pattern), var(--bg); }
+
+/* Text in eigenen Blasen passend zur Akzentfarbe (manche Designs haben dunklen Text auf hellem Akzent) */
+:root[data-design]:not([data-design="classic"]) .msg.me .meta { color: color-mix(in srgb, var(--on-accent) 72%, transparent); }
+:root[data-design]:not([data-design="classic"]) .msg.me .tick.read { color: var(--on-accent); text-shadow: none; }
+
+/* Vorschau-Karte für Classic: immer das bisherige dunkle Aussehen */
+.design-opt[data-design="classic"] {
+  --bg: #0e0e10; --fg: #ededed; --muted: #7c7c84; --line: #1f1f23; --soft: #1a1a1d; --accent: #1a8cff; --on-accent: #ffffff;
+}
+
+/* ---------------- Dunkle Designs ---------------- */
+:root[data-design="instrument"], .design-opt[data-design="instrument"] {
+  color-scheme: dark;
+  --bg: #0a0a0a; --fg: #f2f2f2; --muted: #8a8a8a; --line: #1e1e1e; --soft: #161616;
+  --accent: #f2f2f2; --on-accent: #0a0a0a;
+}
+:root[data-design="frosted"], .design-opt[data-design="frosted"] {
+  color-scheme: dark;
+  --bg: #232833; --fg: #eef2f8; --muted: #9aa3b2; --line: #3a4150; --soft: rgba(255, 255, 255, .07);
+  --accent: #7aa7ff; --on-accent: #0d1526;
+  --pattern: radial-gradient(120% 60% at 0% 0%, rgba(122, 167, 255, .14), transparent 60%), radial-gradient(90% 50% at 100% 100%, rgba(255, 255, 255, .06), transparent 60%);
+}
+:root[data-design="neon"], .design-opt[data-design="neon"] {
+  color-scheme: dark;
+  --bg: #07040f; --fg: #f5ecff; --muted: #9a86b8; --line: #2a1640; --soft: #140a24;
+  --accent: #00e5ff; --on-accent: #001318; --neon2: #ff2bd6;
+}
+:root[data-design="aurora"], .design-opt[data-design="aurora"] {
+  color-scheme: dark;
+  --bg: #0b0d17; --fg: #eef0ff; --muted: #8b90b0; --line: #1c2036; --soft: #151a2c;
+  --accent: #22d3ee; --on-accent: #04141a;
+  --pattern: radial-gradient(60% 35% at 15% 0%, rgba(13, 148, 136, .28), transparent 70%), radial-gradient(50% 30% at 55% 0%, rgba(124, 58, 237, .22), transparent 70%), radial-gradient(45% 28% at 95% 0%, rgba(234, 88, 12, .22), transparent 70%);
+}
+:root[data-design="mica"], .design-opt[data-design="mica"] {
+  color-scheme: dark;
+  --bg: #1c2432; --fg: #e6ebf2; --muted: #8a96a8; --line: #2a3445; --soft: #243044;
+  --accent: #4cc2ff; --on-accent: #001a2b;
+}
+:root[data-design="dotmatrix"], .design-opt[data-design="dotmatrix"] {
+  color-scheme: dark;
+  --bg: #050505; --fg: #f2f2f2; --muted: #8a8a8a; --line: #222222; --soft: #121212;
+  --accent: #e11d2a; --on-accent: #ffffff;
+  --font: Consolas, "Cascadia Mono", monospace;
+  --pattern: radial-gradient(rgba(255, 255, 255, .13) 1px, transparent 1.2px) 0 0 / 12px 12px;
+}
+:root[data-design="terminal"], .design-opt[data-design="terminal"] {
+  color-scheme: dark;
+  --bg: #020a04; --fg: #b9f5c8; --muted: #4f9a64; --line: #0f3a1a; --soft: #06180b;
+  --accent: #39ff6a; --on-accent: #001a06;
+  --font: Consolas, "Cascadia Mono", monospace;
+}
+:root[data-design="album"], .design-opt[data-design="album"] {
+  color-scheme: dark;
+  --bg: #181818; --fg: #f5f5f5; --muted: #a0a0a0; --line: #262626; --soft: #232323;
+  --accent: #1ed760; --on-accent: #000000;
+}
+:root[data-design="blueprint"], .design-opt[data-design="blueprint"] {
+  color-scheme: dark;
+  --bg: #13305a; --fg: #e6f1ff; --muted: #8fb3dd; --line: #2e5487; --soft: #1a3c6b;
+  --accent: #8fd8ff; --on-accent: #0b2346;
+  --font: Consolas, "Cascadia Mono", monospace;
+  --pattern: linear-gradient(rgba(143, 216, 255, .09) 1px, transparent 1px) 0 0 / 16px 16px, linear-gradient(90deg, rgba(143, 216, 255, .09) 1px, transparent 1px) 0 0 / 16px 16px;
+}
+:root[data-design="kiln"], .design-opt[data-design="kiln"] {
+  color-scheme: dark;
+  --bg: #432b28; --fg: #f7e6dc; --muted: #c09a8a; --line: #5c3d38; --soft: #523632;
+  --accent: #ffab76; --on-accent: #3a1d12;
+}
+:root[data-design="nocturne"], .design-opt[data-design="nocturne"] {
+  color-scheme: dark;
+  --bg: #2a2236; --fg: #ece4f7; --muted: #a397b8; --line: #3a3049; --soft: #342a43;
+  --accent: #d7b4f7; --on-accent: #2a1640;
+  --font: Georgia, Cambria, "Times New Roman", serif;
+}
+:root[data-design="commanddeck"], .design-opt[data-design="commanddeck"] {
+  color-scheme: dark;
+  --bg: #161b24; --fg: #dbe4f0; --muted: #7d8ba0; --line: #2b3442; --soft: #1f2632;
+  --accent: #7fb2ff; --on-accent: #0b1730;
+}
+
+/* ---------------- Helle Designs ---------------- */
+:root[data-design="paper"], .design-opt[data-design="paper"] {
+  color-scheme: light;
+  --bg: #faf7f0; --fg: #2a2622; --muted: #8c8378; --line: #e8e1d4; --soft: #f1ece1;
+  --accent: #c2410c; --on-accent: #ffffff;
+  --font: Georgia, Cambria, "Times New Roman", serif;
+}
+:root[data-design="brutalist"], .design-opt[data-design="brutalist"] {
+  color-scheme: light;
+  --bg: #ffffff; --fg: #000000; --muted: #555555; --line: #000000; --soft: #f0f0f0;
+  --accent: #ff4d00; --on-accent: #ffffff;
+  --font: "Arial Black", "Segoe UI", sans-serif;
+}
+:root[data-design="prism"], .design-opt[data-design="prism"] {
+  color-scheme: light;
+  --bg: #e8ecf2; --fg: #1b2433; --muted: #6b7689; --line: #d3dae5; --soft: #f6f8fb;
+  --accent: #0b5cad; --on-accent: #ffffff;
+  --pattern: linear-gradient(135deg, rgba(255, 255, 255, .6), transparent 40%, rgba(180, 200, 230, .25));
+}
+:root[data-design="material"], .design-opt[data-design="material"] {
+  color-scheme: light;
+  --bg: #f6f1f8; --fg: #1d1b20; --muted: #79747e; --line: #e7e0ec; --soft: #ece6f0;
+  --accent: #6750a4; --on-accent: #ffffff;
+}
+:root[data-design="hardware"], .design-opt[data-design="hardware"] {
+  color-scheme: light;
+  --bg: #e4e4df; --fg: #1d1d1b; --muted: #7a7a74; --line: #c9c9c2; --soft: #d8d8d2;
+  --accent: #ff5a1f; --on-accent: #ffffff;
+  --font: Consolas, "Cascadia Mono", monospace;
+}
+:root[data-design="aero"], .design-opt[data-design="aero"] {
+  color-scheme: light;
+  --bg: #e0f4fd; --fg: #0d3550; --muted: #5a8199; --line: #b5def2; --soft: #f3fbff;
+  --accent: #1478b8; --on-accent: #ffffff;
+  --pattern: linear-gradient(180deg, rgba(120, 214, 255, .35), transparent 35%);
+}
+:root[data-design="retro98"], .design-opt[data-design="retro98"] {
+  color-scheme: light;
+  --bg: #c0c0c0; --fg: #000000; --muted: #404040; --line: #808080; --soft: #dfdfdf;
+  --accent: #000080; --on-accent: #ffffff;
+  --font: Tahoma, "MS Sans Serif", "Segoe UI", sans-serif;
+}
+:root[data-design="pocket"], .design-opt[data-design="pocket"] {
+  color-scheme: light;
+  --bg: #9bbb10; --fg: #10300a; --muted: #3b5a14; --line: #7f9a0e; --soft: #8aab0d;
+  --accent: #1f3d0c; --on-accent: #c9e06a;
+  --font: Consolas, "Cascadia Mono", monospace;
+}
+:root[data-design="matcha"], .design-opt[data-design="matcha"] {
+  color-scheme: light;
+  --bg: #e5ecdc; --fg: #1f3527; --muted: #6c7f68; --line: #cdd8c2; --soft: #f2f6ec;
+  --accent: #2f5d45; --on-accent: #ffffff;
+}
+:root[data-design="signalbox"], .design-opt[data-design="signalbox"] {
+  color-scheme: light;
+  --bg: #ffe39e; --fg: #1d1a12; --muted: #6e6040; --line: #1d1a12; --soft: #fff0c4;
+  --accent: #9e2b20; --on-accent: #ffffff;
+}
+:root[data-design="margin"], .design-opt[data-design="margin"] {
+  color-scheme: light;
+  --bg: #f6f0e8; --fg: #2b241e; --muted: #8e8172; --line: #e3d6c5; --soft: #fbf7f1;
+  --accent: #a3452c; --on-accent: #ffffff;
+  --font: Georgia, Cambria, "Times New Roman", serif;
+  --pattern: linear-gradient(90deg, transparent 10px, rgba(163, 69, 44, .35) 10px 11px, transparent 11px 14px, rgba(163, 69, 44, .35) 14px 15px, transparent 15px);
+}
+
+/* ---------------- Eigenheiten einzelner Designs ---------------- */
+/* Eckig: Brutalist, Retro 98, Terminal, Pocket, Signal Box */
+:root:is([data-design="brutalist"], [data-design="retro98"], [data-design="terminal"], [data-design="pocket"], [data-design="signalbox"])
+  :is(.msg, input, textarea, button.primary, .primary-pill, .segmented, .segmented button, .personalize, .msg-menu, .badge, .reply-bar, .quote) { border-radius: 0; }
+:root:is([data-design="brutalist"], [data-design="signalbox"]) :is(.msg, input, textarea, button.primary, .personalize) { border: 2px solid var(--fg); }
+:root[data-design="brutalist"] .msg.me, :root[data-design="signalbox"] .msg.me { box-shadow: 3px 3px 0 var(--fg); }
+:root:is([data-design="brutalist"], [data-design="dotmatrix"], [data-design="hardware"], [data-design="blueprint"]) .settings h2 { text-transform: uppercase; letter-spacing: 1.5px; }
+
+/* Retro 98: erhabene Knöpfe und Felder */
+:root[data-design="retro98"] :is(button.primary, .primary-pill, .segmented button.active) { background: #c0c0c0; color: #000; box-shadow: inset -1px -1px #000, inset 1px 1px #fff, inset -2px -2px #808080, inset 2px 2px #dfdfdf; }
+:root[data-design="retro98"] :is(input, textarea) { background: #fff; box-shadow: inset 1px 1px #808080, inset -1px -1px #fff, inset 2px 2px #000; }
+:root[data-design="retro98"] .titlebar { background: linear-gradient(90deg, #000080, #1084d0); color: #fff; }
+:root[data-design="retro98"] .titlebar .ic { color: #fff; }
+
+/* Neon: Leuchten */
+:root[data-design="neon"] .msg.me, :root[data-design="neon"] .send { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
+:root[data-design="neon"] .settings h2 { color: var(--neon2); text-shadow: 0 0 8px color-mix(in srgb, var(--neon2) 60%, transparent); }
+:root[data-design="neon"] .personalize { border-color: var(--neon2); }
+
+/* Terminal: grünes Glühen */
+:root[data-design="terminal"] body { text-shadow: 0 0 4px rgba(57, 255, 106, .25); }
+
+/* Aurora und Frutiger Aero: Verlauf in den eigenen Blasen */
+:root[data-design="aurora"] :is(.msg.me, .send) { background: linear-gradient(135deg, #0ea5b7, #7c3aed); color: #fff; }
+:root[data-design="aero"] :is(.msg.me, .send) { background: linear-gradient(180deg, #5cc8ff, #1478b8); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6); }
+
+/* Material: Pillen-Knöpfe, rundere Blasen */
+:root[data-design="material"] :is(button.primary, .primary-pill) { border-radius: 999px; }
+:root[data-design="material"] .msg { border-radius: 20px; }
+
+/* Frosted Glass und Prism Glass: Milchglas-Menüs */
+:root:is([data-design="frosted"], [data-design="prism"]) .msg-menu { background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(14px); }
+
+/* ---------------- Auswahl-Karten in den Einstellungen ---------------- */
+.design-grid { --sel: var(--accent); display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin-top: 4px; }
+.design-opt {
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; --pattern: none;
+  position: relative; height: 72px; border-radius: 12px; overflow: hidden; text-align: left;
+  background: var(--pattern), var(--bg); color: var(--fg); font-family: var(--font);
+  border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent); padding: 0 12px 10px;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; transition: transform .12s;
+}
+.design-opt:hover { transform: translateY(-1px); }
+.design-opt .dz-notch { position: absolute; top: -1px; left: 50%; transform: translateX(-50%); width: 46%; height: 13px; border-radius: 0 0 8px 8px; background: var(--soft); border: 1px solid var(--line); border-top: 0; }
+.design-opt .dz-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.design-opt .dz-bar { width: 22px; height: 4px; border-radius: 2px; background: var(--accent); }
+.design-opt[data-design="neon"] { border-color: var(--neon2); }
+.design-opt[data-design="neon"] .dz-notch { border-color: var(--neon2); background: transparent; }
+.design-opt:is([data-design="brutalist"], [data-design="retro98"], [data-design="terminal"], [data-design="pocket"], [data-design="signalbox"]) { border-radius: 0; }
+.design-opt[data-design="aurora"] .dz-notch { background: linear-gradient(90deg, #0d9488, #7c3aed, #ea580c); border: 0; }
+.design-opt[data-design="aero"] .dz-notch { background: linear-gradient(180deg, #b8ecff, #5cc8ff); border: 0; }
+.design-opt.active { outline: 2px solid var(--sel); outline-offset: 2px; }
+.design-hint { margin-top: 2px; }
+.segmented.disabled { opacity: .4; pointer-events: none; }

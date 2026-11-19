@@ -94,6 +94,7 @@ Mit **Test senden** kommt nach 5 Sekunden ein echter Test-Push über den Server.
 | 🏆 **Erfolge** | 32 Erfolge zum Freischalten, z. B. 25 Nachrichten, erstes GIF, Nachteule, 7 Tage am Stück oder 5 gewonnene Mini-Spiele |
 | 🖼️ **Profil** | Profilbild, Name und Status. Deine Freunde sehen dein Bild und deine Erfolge |
 | 🐱 **Profilrahmen** | 11 Rahmen fürs Profilbild: Katzenohren, Hasenohren, Teufelshörner, Heiligenschein, Krone, Partyhut, Kopfhörer, Blumenkranz, Herzen, Funkeln, Neon |
+| 🎨 **Designs** | 24 Looks für die ganze App unter Du → Personalisieren: Classic, Instrument, Frosted Glass, NEON, Paper, Terminal, BRUTALIST, Aurora, Prism Glass, Material, Mica, DOT MATRIX, HARDWARE, Frutiger Aero, Retro 98, POCKET, Album, BLUEPRINT, Matcha, Kiln, Nocturne, SIGNAL BOX, Margin Notes, Command Deck |
 | 🔔 **Benachrichtigungen** | Windows-Benachrichtigungen wie bei Teams/Discord mit Profilbild. Ein Klick öffnet den Chat. Roter Zähler am Taskleisten-Icon |
 | ↩️ **Direkt antworten** | Wie bei Teams direkt in der Benachrichtigung antworten, ohne WhatsUp zu öffnen. `Enter` sendet, `Shift+Enter` macht eine neue Zeile (eigenes Benachrichtigungsfenster unten rechts, in den Einstellungen abschaltbar) |
 | 🖥️ **Hintergrund** | ✕ schließt nicht, WhatsUp läuft unten rechts im Infobereich weiter. Optional mit Windows starten |

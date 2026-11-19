@@ -25,7 +25,7 @@ if (TEST_MODE) {
 const IS_PORTABLE = !!process.env.PORTABLE_EXECUTABLE_FILE;
 const START_HIDDEN = process.argv.includes('--hidden');
 // Wird vom Fenster aus den Einstellungen gesetzt
-const prefs = { runInBackground: true, openAtLogin: false, popupNotify: true, theme: 'system' };
+const prefs = { runInBackground: true, openAtLogin: false, popupNotify: true, theme: 'system', design: 'classic' };
 
 // Optional: --profile=name startet ein getrenntes Profil (z. B. zum Testen mit zwei Fenstern)
 const profileArg = process.argv.find((a) => a.startsWith('--profile='));
@@ -327,7 +327,7 @@ ipcMain.on('notify', (_e, n) => {
   const placeholder = String(n.replyPlaceholder || 'Antworten…').slice(0, 60);
   if (prefs.popupNotify) {
     const icon = typeof n.icon === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(n.icon) && n.icon.length < 2e6 ? n.icon : null;
-    showPopup({ id: require('crypto').randomUUID(), chatId, title, body, icon, placeholder, silent: !!n.silent, theme: prefs.theme });
+    showPopup({ id: require('crypto').randomUUID(), chatId, title, body, icon, placeholder, silent: !!n.silent, theme: prefs.theme, design: prefs.design });
     if (win && !win.isFocused()) win.flashFrame(true);
     return;
   }
@@ -385,6 +385,7 @@ ipcMain.on('prefs', (_e, p) => {
   prefs.openAtLogin = !!p.openAtLogin;
   prefs.popupNotify = p.popupNotify !== false;
   prefs.theme = ['light', 'dark'].includes(p.theme) ? p.theme : 'system';
+  prefs.design = typeof p.design === 'string' && /^[a-z0-9]{1,20}$/.test(p.design) ? p.design : 'classic';
   if (app.isPackaged && !IS_PORTABLE) {
     app.setLoginItemSettings({ openAtLogin: prefs.openAtLogin, args: ['--hidden'] });
   }

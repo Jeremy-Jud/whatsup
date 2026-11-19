@@ -111,6 +111,8 @@
     if (!n || typeof n !== 'object') return;
     if (n.theme === 'light' || n.theme === 'dark') document.documentElement.setAttribute('data-theme', n.theme);
     else document.documentElement.removeAttribute('data-theme');
+    if (typeof n.design === 'string' && n.design !== 'classic') document.documentElement.setAttribute('data-design', n.design);
+    else document.documentElement.removeAttribute('data-design');
     const key = n.chatId || n.id;
     let it = items.get(key);
     if (it && it.closing) { it.el.remove(); items.delete(key); it = null; }

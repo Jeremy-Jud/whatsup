@@ -6,6 +6,7 @@
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: wss:; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:">
   <title>WhatsUp</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="designs.css">
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -180,10 +181,11 @@
       </div>
       <label class="field">Name<input id="profName" maxlength="24" autocomplete="off"></label>
       <label class="field">Status<input id="profStatus" maxlength="80" placeholder="Optional" autocomplete="off"></label>
-      <!-- Personalisieren: Profilrahmen und Banner zum Ausklappen -->
+      <!-- Personalisieren: Design, Profilrahmen und Banner zum Ausklappen -->
       <details class="personalize" id="personalize">
-        <summary><span class="pers-ic">🎨</span><span class="pers-title">Personalisieren<span class="muted pers-sub">Profilrahmen und Banner</span></span><span class="pers-arrow">›</span></summary>
+        <summary><span class="pers-ic">🎨</span><span class="pers-title">Personalisieren<span class="muted pers-sub">Design, Profilrahmen und Banner</span></span><span class="pers-arrow">›</span></summary>
         <div class="pers-body">
+          <div class="field">Design<div id="designGrid" class="design-grid"></div></div>
           <div class="field">Profilrahmen<div id="frameGrid" class="frame-grid"></div></div>
           <div class="field">Banner um deinen Status<div id="bannerGrid" class="banner-grid"></div></div>
         </div>
@@ -210,6 +212,7 @@
         <button data-theme="light">Hell</button>
         <button data-theme="dark">Dunkel</button>
       </div>
+      <div class="muted design-hint hidden" id="designHint">Hell/Dunkel gilt für das Design „Classic“. Ändern unter Profil → Personalisieren.</div>
 
       <h2>Benachrichtigungen</h2>
       <label class="setting"><span>Benachrichtigungen</span><input type="checkbox" class="switch" id="setNotify"></label>

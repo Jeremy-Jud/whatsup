@@ -141,7 +141,7 @@
   let unread = store.load('unread', {});           // chatId -> Anzahl
   let recentEmojis = store.load('recentEmojis', []);
   const settings = Object.assign({
-    theme: 'system', notify: true, sound: true, preview: true, autoUpdate: true,
+    theme: 'system', design: 'classic', notify: true, sound: true, preview: true, autoUpdate: true,
     runInBackground: true, openAtLogin: false, bgHintShown: false, relay: true, popupNotify: true, leaderboard: true,
     typing: true, gifSearch: true,
   }, store.load('settings', {}));
@@ -1626,7 +1626,7 @@
     settings.bgHintShown = true; saveSettings();
     window.chatboxWindow.notify({ title: 'WhatsUp läuft im Hintergrund weiter', body: 'So verpasst du keine Nachrichten. Zum Öffnen oder Beenden klicke auf das WhatsUp-Symbol unten rechts in der Taskleiste.', silent: true });
   });
-  const sendPrefs = () => window.chatboxWindow.setPrefs({ runInBackground: settings.runInBackground, openAtLogin: settings.openAtLogin, popupNotify: settings.popupNotify, theme: settings.theme });
+  const sendPrefs = () => window.chatboxWindow.setPrefs({ runInBackground: settings.runInBackground, openAtLogin: settings.openAtLogin, popupNotify: settings.popupNotify, theme: settings.theme, design: settings.design });
 
   const toastQueue = [];
   let toastBusy = false;
@@ -3966,16 +3966,41 @@
   $('profCopy').onclick = () => $('copyBtn').click();
 
   // Darstellung
+  // Designs (Farben in designs.css). „classic“ = bisheriges Aussehen mit Hell/Dunkel.
+  const DESIGNS = [
+    ['classic', 'Classic'], ['instrument', 'Instrument'], ['frosted', 'Frosted Glass'], ['neon', 'NEON'],
+    ['paper', 'Paper'], ['terminal', 'Terminal'], ['brutalist', 'BRUTALIST'], ['aurora', 'Aurora'],
+    ['prism', 'Prism Glass'], ['material', 'Material'], ['mica', 'Mica'], ['dotmatrix', 'DOT MATRIX'],
+    ['hardware', 'HARDWARE'], ['aero', 'Frutiger Aero'], ['retro98', 'Retro 98'], ['pocket', 'POCKET'],
+    ['album', 'Album'], ['blueprint', 'BLUEPRINT'], ['matcha', 'Matcha'], ['kiln', 'Kiln'],
+    ['nocturne', 'Nocturne'], ['signalbox', 'SIGNAL BOX'], ['margin', 'Margin Notes'], ['commanddeck', 'Command Deck'],
+  ];
+  if (!DESIGNS.some(([id]) => id === settings.design)) settings.design = 'classic';
   function applyTheme() {
-    if (settings.theme === 'system') document.documentElement.removeAttribute('data-theme');
-    else document.documentElement.setAttribute('data-theme', settings.theme);
+    const root = document.documentElement;
+    if (settings.theme === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', settings.theme);
+    if (settings.design === 'classic') root.removeAttribute('data-design');
+    else root.setAttribute('data-design', settings.design);
   }
   function renderTheme() {
-    $('themeSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.theme === settings.theme));
+    const classic = settings.design === 'classic';
+    $('themeSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('active', classic && b.dataset.theme === settings.theme));
+    $('themeSeg').classList.toggle('disabled', !classic);
+    $('designHint').classList.toggle('hidden', classic);
+    $('designGrid').querySelectorAll('.design-opt').forEach((b) => b.classList.toggle('active', b.dataset.design === settings.design));
   }
   $('themeSeg').querySelectorAll('button').forEach((b) => {
     b.onclick = () => { settings.theme = b.dataset.theme; saveSettings(); applyTheme(); renderTheme(); sendPrefs(); };
   });
+  for (const [id, name] of DESIGNS) {
+    const b = el('button', 'design-opt');
+    b.dataset.design = id;
+    b.title = name;
+    b.append(el('span', 'dz-notch'), el('span', 'dz-name', name), el('span', 'dz-bar'));
+    b.onclick = () => { settings.design = id; saveSettings(); applyTheme(); renderTheme(); sendPrefs(); };
+    $('designGrid').append(b);
+  }
 
   // Allgemein
   function renderNotifyRows() {

@@ -7,6 +7,7 @@
   <title>WhatsUp</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="designs.css">
+  <link rel="stylesheet" href="liquid-glass.css">
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -113,6 +114,8 @@
 
   <!-- Chat -->
   <section id="viewChat" class="view hidden">
+    <!-- chat-top / chat-bottom: normal unsichtbar (display: contents), bei Liquid Glass schwebende Leisten -->
+    <div class="chat-top">
     <div class="chatbar">
       <button id="chatHead" class="chathead" title="Infos">
         <span id="chatAvatar"></span>
@@ -134,7 +137,9 @@
       <button type="button" id="chatSearchDown" class="ic" title="Neuerer Treffer"><svg><use href="#i-down"/></svg></button>
       <button type="button" id="chatSearchClose" class="ic" title="Suche schließen"><svg><use href="#i-x"/></svg></button>
     </div>
+    </div>
     <div id="messages" class="messages"></div>
+    <div class="chat-bottom">
     <div id="emojiPanel" class="emoji-panel hidden">
       <div id="emojiTabs" class="emoji-tabs"></div>
       <div id="emojiGrid" class="emoji-grid"></div>
@@ -165,6 +170,7 @@
         <button type="button" id="recSend" class="send" title="Sprachnachricht senden"><svg><use href="#i-send"/></svg></button>
       </div>
     </form>
+    </div>
     <div id="dropHint" class="drop-hint hidden">Bild oder Datei hier ablegen</div>
   </section>
 
@@ -212,7 +218,7 @@
         <button data-theme="light">Hell</button>
         <button data-theme="dark">Dunkel</button>
       </div>
-      <div class="muted design-hint hidden" id="designHint">Hell/Dunkel gilt für das Design „Classic“. Ändern unter Profil → Personalisieren.</div>
+      <div class="muted design-hint hidden" id="designHint">Hell/Dunkel gilt für die Designs „Standard“ und „Liquid Glass“. Ändern unter Profil → Personalisieren.</div>
 
       <h2>Benachrichtigungen</h2>
       <label class="setting"><span>Benachrichtigungen</span><input type="checkbox" class="switch" id="setNotify"></label>
@@ -492,6 +498,8 @@
   <script src="lib.js"></script>
   <script src="qr.js"></script>
   <script src="quiz-questions.js"></script>
+  <script src="liquid-glass.js"></script>
+  <script src="fx.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

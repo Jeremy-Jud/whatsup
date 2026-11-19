@@ -3966,15 +3966,15 @@
   $('profCopy').onclick = () => $('copyBtn').click();
 
   // Darstellung
-  // Designs (Farben in designs.css). „classic“ = bisheriges Aussehen mit Hell/Dunkel.
+  // Designs: Farben in designs.css, bewegte Hintergründe in fx.js,
+  // Liquid Glass in liquid-glass.css/.js. „classic“ = bisheriges Aussehen.
+  // Standard und Liquid Glass folgen Hell/Dunkel.
   const DESIGNS = [
-    ['classic', 'Classic'], ['instrument', 'Instrument'], ['frosted', 'Frosted Glass'], ['neon', 'NEON'],
-    ['paper', 'Paper'], ['terminal', 'Terminal'], ['brutalist', 'BRUTALIST'], ['aurora', 'Aurora'],
-    ['prism', 'Prism Glass'], ['material', 'Material'], ['mica', 'Mica'], ['dotmatrix', 'DOT MATRIX'],
-    ['hardware', 'HARDWARE'], ['aero', 'Frutiger Aero'], ['retro98', 'Retro 98'], ['pocket', 'POCKET'],
-    ['album', 'Album'], ['blueprint', 'BLUEPRINT'], ['matcha', 'Matcha'], ['kiln', 'Kiln'],
-    ['nocturne', 'Nocturne'], ['signalbox', 'SIGNAL BOX'], ['margin', 'Margin Notes'], ['commanddeck', 'Command Deck'],
+    ['classic', 'Standard'], ['liquid', 'Liquid Glass'], ['galaxy', 'Galaxy'], ['synthwave', 'Synthwave'],
+    ['tiefsee', 'Tiefsee'], ['sakura', 'Kirschblüte'], ['winter', 'Winterzauber'], ['fireflies', 'Glühwürmchen'],
+    ['lava', 'Lavalampe'], ['storm', 'Gewitter'], ['sunset', 'Abendrot'], ['gold', 'Goldstaub'],
   ];
+  const ADAPTIVE = ['classic', 'liquid'];
   if (!DESIGNS.some(([id]) => id === settings.design)) settings.design = 'classic';
   function applyTheme() {
     const root = document.documentElement;
@@ -3982,12 +3982,14 @@
     else root.setAttribute('data-theme', settings.theme);
     if (settings.design === 'classic') root.removeAttribute('data-design');
     else root.setAttribute('data-design', settings.design);
+    if (window.LiquidGlass) window.LiquidGlass.set(settings.design === 'liquid');
+    if (window.ThemeFx) window.ThemeFx.set(settings.design);
   }
   function renderTheme() {
-    const classic = settings.design === 'classic';
-    $('themeSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('active', classic && b.dataset.theme === settings.theme));
-    $('themeSeg').classList.toggle('disabled', !classic);
-    $('designHint').classList.toggle('hidden', classic);
+    const adaptive = ADAPTIVE.includes(settings.design);
+    $('themeSeg').querySelectorAll('button').forEach((b) => b.classList.toggle('active', adaptive && b.dataset.theme === settings.theme));
+    $('themeSeg').classList.toggle('disabled', !adaptive);
+    $('designHint').classList.toggle('hidden', adaptive);
     $('designGrid').querySelectorAll('.design-opt').forEach((b) => b.classList.toggle('active', b.dataset.design === settings.design));
   }
   $('themeSeg').querySelectorAll('button').forEach((b) => {
@@ -3997,7 +3999,8 @@
     const b = el('button', 'design-opt');
     b.dataset.design = id;
     b.title = name;
-    b.append(el('span', 'dz-notch'), el('span', 'dz-name', name), el('span', 'dz-bar'));
+    b.append(el('span', 'dz-scene'), el('span', 'dz-b1'), el('span', 'dz-b2'), el('span', 'dz-name', name), el('span', 'dz-check', '✓'));
+    if (window.ThemeFx) window.ThemeFx.preview(b, id);   // Mini-Szene (nur Designs mit bewegtem Hintergrund)
     b.onclick = () => { settings.design = id; saveSettings(); applyTheme(); renderTheme(); sendPrefs(); };
     $('designGrid').append(b);
   }

@@ -196,21 +196,28 @@
           <div class="field">Banner um deinen Status<div id="bannerGrid" class="banner-grid"></div></div>
         </div>
       </details>
-      <div class="setting">
-        <span>Dein Code</span>
-        <span class="row-end"><span class="code-sm" id="profCode"></span>
-          <button id="profQr" class="ic small-ic" title="QR-Code zeigen"><svg><use href="#i-qr"/></svg></button>
-          <button id="profCopy" class="ic small-ic" title="Kopieren"><svg><use href="#i-copy"/></svg></button></span>
+      <!-- .group: Zeilen eines Abschnitts als Karte mit Trennlinien -->
+      <div class="group">
+        <div class="setting">
+          <span>Dein Code</span>
+          <span class="row-end"><span class="code-sm" id="profCode"></span>
+            <button id="profQr" class="ic small-ic" title="QR-Code zeigen"><svg><use href="#i-qr"/></svg></button>
+            <button id="profCopy" class="ic small-ic" title="Kopieren"><svg><use href="#i-copy"/></svg></button></span>
+        </div>
       </div>
       <button id="profSave" class="primary full hidden">Speichern</button>
 
       <h2>Chats</h2>
-      <label class="setting"><span>Anzeigen, wenn ich schreibe<span class="muted setting-sub">Andere sehen „schreibt…“, solange du tippst</span></span><input type="checkbox" class="switch" id="setTyping"></label>
-      <div class="setting"><span>Wochenrückblick<span class="muted setting-sub">Deine Woche in Zahlen: Nachrichten, Top-Chats, Lieblings-Emoji</span></span><button id="recapBtn" class="link">Ansehen</button></div>
-      <label class="setting" id="gifRow"><span>GIF-Suche im Emoji-Feld<span class="muted setting-sub">Suchbegriffe gehen an GIPHY</span></span><input type="checkbox" class="switch" id="setGif"></label>
+      <div class="group">
+        <label class="setting"><span>Anzeigen, wenn ich schreibe<span class="muted setting-sub">Andere sehen „schreibt…“, solange du tippst</span></span><input type="checkbox" class="switch" id="setTyping"></label>
+        <div class="setting"><span>Wochenrückblick<span class="muted setting-sub">Deine Woche in Zahlen: Nachrichten, Top-Chats, Lieblings-Emoji</span></span><button id="recapBtn" class="link">Ansehen</button></div>
+        <label class="setting" id="gifRow"><span>GIF-Suche im Emoji-Feld<span class="muted setting-sub">Suchbegriffe gehen an GIPHY</span></span><input type="checkbox" class="switch" id="setGif"></label>
+      </div>
 
       <h2>Ranglisten</h2>
-      <label class="setting"><span>In Ranglisten zeigen<span class="muted setting-sub">Name, Code, Erfolge, längster Streak und Challenge-Punkte sind für alle sichtbar</span></span><input type="checkbox" class="switch" id="setLeaderboard"></label>
+      <div class="group">
+        <label class="setting"><span>In Ranglisten zeigen<span class="muted setting-sub">Name, Code, Erfolge, längster Streak und Challenge-Punkte sind für alle sichtbar</span></span><input type="checkbox" class="switch" id="setLeaderboard"></label>
+      </div>
 
       <h2>Darstellung</h2>
       <div class="segmented" id="themeSeg">
@@ -221,24 +228,32 @@
       <div class="muted design-hint hidden" id="designHint">Hell/Dunkel gilt für die Designs „Standard“ und „Liquid Glass“. Ändern unter Profil → Personalisieren.</div>
 
       <h2>Benachrichtigungen</h2>
-      <label class="setting"><span>Benachrichtigungen</span><input type="checkbox" class="switch" id="setNotify"></label>
-      <label class="setting"><span>Ton</span><input type="checkbox" class="switch" id="setSound"></label>
-      <label class="setting desktop-only"><span>Eigenes Fenster (Enter senden, Shift+Enter neue Zeile)</span><input type="checkbox" class="switch" id="setPopup"></label>
-      <label class="setting"><span>Nachricht in der Vorschau zeigen</span><input type="checkbox" class="switch" id="setPreview"></label>
-      <div class="setting"><span class="muted">Wie sieht das aus?</span><button id="notifyTest" class="link">Test senden</button></div>
+      <div class="group">
+        <label class="setting"><span>Benachrichtigungen</span><input type="checkbox" class="switch" id="setNotify"></label>
+        <label class="setting"><span>Ton</span><input type="checkbox" class="switch" id="setSound"></label>
+        <label class="setting desktop-only"><span>Eigenes Fenster<span class="muted setting-sub">Enter sendet, Shift+Enter macht eine neue Zeile</span></span><input type="checkbox" class="switch" id="setPopup"></label>
+        <label class="setting"><span>Nachricht in der Vorschau zeigen</span><input type="checkbox" class="switch" id="setPreview"></label>
+        <div class="setting"><span class="muted">Wie sieht das aus?</span><button id="notifyTest" class="link">Test senden</button></div>
+      </div>
 
       <h2 class="desktop-only">Allgemein</h2>
-      <label class="setting desktop-only"><span>Beim Schließen im Hintergrund weiterlaufen</span><input type="checkbox" class="switch" id="setBackground"></label>
-      <label class="setting desktop-only" id="loginRow"><span>Mit Windows starten</span><input type="checkbox" class="switch" id="setLogin"></label>
-      <label class="setting desktop-only"><span>Immer im Vordergrund</span><input type="checkbox" class="switch" id="setPin"></label>
+      <div class="group desktop-only">
+        <label class="setting desktop-only"><span>Beim Schließen im Hintergrund weiterlaufen</span><input type="checkbox" class="switch" id="setBackground"></label>
+        <label class="setting desktop-only" id="loginRow"><span>Mit Windows starten</span><input type="checkbox" class="switch" id="setLogin"></label>
+        <label class="setting desktop-only"><span>Immer im Vordergrund</span><input type="checkbox" class="switch" id="setPin"></label>
+      </div>
 
       <h2>Offline-Zustellung</h2>
-      <label class="setting"><span>Nachrichten über den Server zustellen, wenn jemand offline ist</span><input type="checkbox" class="switch" id="setRelay"></label>
-      <div class="setting"><span class="muted">Ende-zu-Ende-verschlüsselt, der Server kann nichts lesen</span><span class="muted" id="relayStatus">–</span></div>
+      <div class="group">
+        <label class="setting"><span>Über den Server zustellen<span class="muted setting-sub">Wenn jemand offline ist. Ende-zu-Ende-verschlüsselt, der Server kann nichts lesen.</span></span><input type="checkbox" class="switch" id="setRelay"></label>
+        <div class="setting"><span class="muted">Status</span><span class="muted" id="relayStatus">–</span></div>
+      </div>
 
       <h2>Updates</h2>
-      <div class="setting"><span>Version</span><span class="muted" id="appVersion">–</span></div>
-      <label class="setting desktop-only"><span>Beim Start nach Updates suchen</span><input type="checkbox" class="switch" id="setAutoUpdate"></label>
+      <div class="group">
+        <div class="setting"><span>Version</span><span class="muted" id="appVersion">–</span></div>
+        <label class="setting desktop-only"><span>Beim Start nach Updates suchen</span><input type="checkbox" class="switch" id="setAutoUpdate"></label>
+      </div>
       <div class="update-box desktop-only">
         <div class="muted" id="updateStatus"></div>
         <div class="bar hidden" id="updateBar"><div id="updateFill"></div></div>
@@ -246,23 +261,31 @@
       </div>
 
       <h2>Speicher</h2>
-      <div class="setting"><span>Belegt</span><span class="muted" id="storageUsed">–</span></div>
-      <div class="setting"><span class="muted">Chats nach Größe anzeigen und leeren</span><button id="storageManage" class="link">Verwalten</button></div>
-      <div class="setting"><span>Verlauf auf diesem Gerät</span><span class="muted" id="encStatus">–</span></div>
+      <div class="group">
+        <div class="setting"><span>Belegt</span><span class="muted" id="storageUsed">–</span></div>
+        <div class="setting"><span>Chats nach Größe<span class="muted setting-sub">Anzeigen und einzeln leeren</span></span><button id="storageManage" class="link">Verwalten</button></div>
+        <div class="setting"><span>Verlauf auf diesem Gerät</span><span class="muted" id="encStatus">–</span></div>
+      </div>
 
       <h2>Backup</h2>
-      <div class="setting"><span>Alles mit Passwort sichern<span class="muted setting-sub">Profil, Freunde, Chats, Bilder und Dateien. Wiederherstellen beim Einrichten über „Backup wiederherstellen“.</span></span><button id="backupBtn" class="link">Erstellen</button></div>
+      <div class="group">
+        <div class="setting"><span>Alles mit Passwort sichern<span class="muted setting-sub">Profil, Freunde, Chats, Bilder und Dateien. Wiederherstellen beim Einrichten über „Backup wiederherstellen“.</span></span><button id="backupBtn" class="link">Erstellen</button></div>
+      </div>
 
       <div id="adminSection" class="admin-section hidden">
         <h2>🛡️ Admin</h2>
-        <div class="setting"><span>Nutzer von WhatsUp</span><span class="muted" id="adminCount">–</span></div>
-        <div class="setting"><span class="muted">Name, Code und zuletzt aktiv</span><button id="adminUsersBtn" class="link">Alle anzeigen</button></div>
+        <div class="group">
+          <div class="setting"><span>Nutzer von WhatsUp</span><span class="muted" id="adminCount">–</span></div>
+          <div class="setting"><span class="muted">Name, Code und zuletzt aktiv</span><button id="adminUsersBtn" class="link">Alle anzeigen</button></div>
+        </div>
       </div>
 
       <h2>Info</h2>
-      <div class="setting desktop-only"><span>Auf iPhone &amp; iPad</span><button id="webLink" class="link">Link kopieren</button></div>
-      <div class="setting"><span>Quellcode & Downloads</span><button id="repoLink" class="link">GitHub</button></div>
-      <div class="setting music-credit-row"><span class="muted">Musik in UpReels: Kevin MacLeod (incompetech.com), lizenziert unter Creative Commons: By Attribution 4.0 (creativecommons.org/licenses/by/4.0). Gekürzt; in UpReels mit der Stimme gemischt.</span></div>
+      <div class="group" id="infoGroup">
+        <div class="setting desktop-only"><span>Auf iPhone &amp; iPad</span><button id="webLink" class="link">Link kopieren</button></div>
+        <div class="setting"><span>Quellcode & Downloads</span><button id="repoLink" class="link">GitHub</button></div>
+      </div>
+      <p class="muted music-credit">Musik in UpReels: Kevin MacLeod (incompetech.com), lizenziert unter Creative Commons: By Attribution 4.0 (creativecommons.org/licenses/by/4.0). Gekürzt; in UpReels mit der Stimme gemischt.</p>
     </div>
   </section>
 

@@ -16,7 +16,7 @@
 
 /* ---------------- Bewegte Designs: gemeinsame Glasflächen ---------------- */
 #fxCanvas { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
-:root[data-fx] :is(.tabbar, .msg-menu, .modal-box, .mention-box, .personalize, .chall-card, .recbar, .reel-sheet, .emoji-panel, .recap-bar) {
+:root[data-fx] :is(.tabbar, .msg-menu, .modal-box, .mention-box, .personalize, .group, .chall-card, .recbar, .reel-sheet, .emoji-panel, .recap-bar) {
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   -webkit-backdrop-filter: blur(18px) saturate(150%);
   backdrop-filter: blur(18px) saturate(150%);
@@ -30,7 +30,8 @@
 :root[data-fx] :is(.msg.big, .msg.has-media, .msg.sticker, .msg.deleted) { background: none; box-shadow: none; }
 :root[data-fx] .send, :root[data-fx] .primary-pill { background: var(--me, var(--accent)); }
 :root[data-fx] .segmented button.active { background: color-mix(in srgb, var(--fg) 14%, transparent); }
-:root[data-fx] input, :root[data-fx] textarea { background: color-mix(in srgb, var(--fg) 8%, color-mix(in srgb, var(--bg) 50%, transparent)); }
+/* Textfelder, aber nicht Schalter/Regler (die behalten ihre Akzentfarbe) */
+:root[data-fx] :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea) { background: color-mix(in srgb, var(--fg) 8%, color-mix(in srgb, var(--bg) 50%, transparent)); }
 
 /* ---------------- Galaxy: Sternenhimmel mit Sternschnuppen ---------------- */
 :root[data-design="galaxy"], .design-opt[data-design="galaxy"] {

@@ -31,7 +31,7 @@ html.is-web .title { font-size: 16px; }
 html.is-web .tb-logo { width: 20px; height: 20px; }
 
 /* Windows-Einstellungen ausblenden (Hintergrund, Autostart, Vordergrund, Updates) */
-html.is-web h2:has(+ .setting #setBackground),
+html.is-web h2:has(+ .group #setBackground),
 html.is-web .setting:has(#setBackground),
 html.is-web .setting:has(#setLogin),
 html.is-web .setting:has(#setPin),
@@ -54,7 +54,6 @@ html.is-web input, html.is-web textarea { font-size: 16px; }
 }
 
 html.is-web .viewer { inset: calc(48px + env(safe-area-inset-top)) 0 0; }
-html.is-web .setting:has(#webInfo) { padding-top: 6px; padding-bottom: 12px; }
 html.is-web #webInfo { line-height: 1.4; }
 
 /* Status-Vollbild: Notch und Home-Balken freilassen */

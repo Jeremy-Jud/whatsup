@@ -143,7 +143,7 @@
   const settings = Object.assign({
     theme: 'system', design: 'classic', notify: true, sound: true, preview: true, autoUpdate: true,
     runInBackground: true, openAtLogin: false, bgHintShown: false, relay: true, popupNotify: true, leaderboard: true,
-    typing: true, gifSearch: true,
+    typing: true, gifSearch: true, reels: true,
   }, store.load('settings', {}));
   const saveSettings = () => store.save('settings', settings);
   let unlocked = store.load('achievements', {});   // id -> Zeitstempel
@@ -1776,6 +1776,16 @@
     $('titleText').textContent = TITLES[v];
     hideEmoji();
   }
+
+  // UpReels ausgeschaltet: Reiter unten weg (in den Einstellungen wieder einschaltbar)
+  const reelsOn = () => settings.reels !== false;
+  function applyReels() {
+    $('tabReels').classList.toggle('hidden', !reelsOn());
+    if (reelsOn()) return;
+    if (lastTab === 'viewReels') lastTab = 'viewList';
+    if (view === 'viewReels') { show('viewList'); render(); }
+  }
+  applyReels();
 
   let renderQueued = false;
   function scheduleRender() {
@@ -3834,6 +3844,7 @@
     $('setLeaderboard').checked = settings.leaderboard !== false;
     $('setTyping').checked = settings.typing !== false;
     $('setGif').checked = settings.gifSearch !== false;
+    $('setReels').checked = reelsOn();
     $('gifRow').classList.toggle('hidden', !GIPHY_KEY);
     db.encrypted().then((on) => {
       $('encStatus').textContent = on ? '🔒 Verschlüsselt' : document.documentElement.classList.contains('is-web') ? 'Nicht verschlüsselt (Browser)' : 'Nicht verschlüsselt';
@@ -4028,6 +4039,7 @@
     if (!settings.typing && activeChat) stopTyping(activeChat);
   };
   $('setGif').onchange = (e) => { settings.gifSearch = e.target.checked; saveSettings(); };
+  $('setReels').onchange = (e) => { settings.reels = e.target.checked; saveSettings(); applyReels(); };
   $('backupBtn').onclick = () => backup.openCreate();
   $('setRelay').onchange = (e) => {
     settings.relay = e.target.checked; saveSettings();
@@ -5721,7 +5733,7 @@
         const foot = el('div', 'chall-foot');
         foot.append(el('span', '', c.done ? 'Geschafft! 🎉' : `${c.progress} / ${c.goal}`), el('span', '', `+${c.points} Punkte · ${c.finishers} geschafft`));
         body.append(bar, foot);
-        if (c.type === 'reel_sound' && !c.done) {
+        if (c.type === 'reel_sound' && !c.done && reelsOn()) {
           const go = el('button', 'primary chall-go', '🎬 Jetzt posten');
           go.type = 'button';
           go.onclick = () => { show('viewReels'); reels.openFeed(); reels.post({ music: { id: c.music, start: 0 } }); };
@@ -6351,6 +6363,7 @@
       wrap.appendChild(el('div', 'rare-ach-title', 'UpReels'));
       const grid = el('div', 'reel-grid');
       wrap.appendChild(grid);
+      if (!reelsOn()) return wrap; // UpReels ausgeschaltet: im Profil nichts zeigen
       fetch(api(`/user/${code}?v=2&me=${me.code}`)).then((r) => r.json()).then((d) => {
         const rs = d.reels || [];
         if (!rs.length) return;

@@ -167,7 +167,7 @@
 :root[data-design="liquid"] .msg-menu-back { background: color-mix(in srgb, var(--bg) 18%, transparent); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
 
 /* Flächen, die sonst deckend sind */
-:root[data-design="liquid"] :is(.personalize, .chall-card, .recap-bar) {
+:root[data-design="liquid"] :is(.personalize, .chall-card, .recap-bar, .group) {
   position: relative; border: 0; border-radius: 22px;
   background: var(--lg-tint);
   -webkit-backdrop-filter: blur(20px) saturate(180%);

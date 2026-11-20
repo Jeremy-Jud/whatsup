@@ -48,7 +48,7 @@ replace('<meta charset="utf-8">', `<meta charset="utf-8">
 replace('<link rel="stylesheet" href="style.css">', '<link rel="stylesheet" href="style.css">\n  <link rel="stylesheet" href="web.css">');
 replace('<script src="../node_modules/peerjs/dist/peerjs.min.js"></script>',
   '<script src="shim.js"></script>\n  <script src="peerjs.min.js"></script>');
-replace('<h2>Info</h2>', '<h2>Info</h2>\n      <div class="setting"><span class="muted" id="webInfo"></span></div>');
+replace('<div class="group" id="infoGroup">', '<div class="group" id="infoGroup">\n        <div class="setting"><span class="muted" id="webInfo"></span></div>');
 
 // ---- Für Suchmaschinen und Link-Vorschauen (Google, WhatsApp, Discord, LinkedIn …) ----
 const SITE = 'https://jeremy-jud.github.io/whatsup/';

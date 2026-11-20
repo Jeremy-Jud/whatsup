@@ -333,13 +333,41 @@
     return [...s];
   }
 
+  // ---------- Verbindungswege (ICE) für Anrufe und direkte Chats ----------
+  // STUN findet die eigene öffentliche Adresse. TURN leitet weiter, wenn sich zwei Geräte nicht direkt erreichen
+  // (z. B. Mobilfunk, Firmen- oder Schulnetz). Ein eigener TURN-Zugang kommt vom Briefkasten-Server, falls dort eingerichtet.
+  const ICE_BASE = [
+    { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] },
+    { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username: 'peerjs', credential: 'peerjsp' },
+  ];
+  let iceServers = ICE_BASE, iceAt = 0;
+  async function refreshIce() {
+    if (Date.now() - iceAt < 6 * 3600 * 1000) return;
+    iceAt = Date.now() - 5.5 * 3600 * 1000; // bei Fehler in 30 Minuten wieder versuchen
+    try {
+      const d = await Promise.race([relay.ice(), new Promise((r) => setTimeout(r, 4000))]);
+      if (d === undefined) { iceAt = 0; return; } // Briefkasten noch nicht bereit oder zu langsam: beim nächsten Mal
+      const list = (d && Array.isArray(d.iceServers) ? d.iceServers : []).map((s) => ({
+        ...s, urls: [].concat(s.urls || []).filter((u) => typeof u === 'string' && /^(stun|turns?):/.test(u) && !/:53(\?|$)/.test(u)),
+      })).filter((s) => s.urls.length);
+      iceAt = Date.now();
+      if (!list.length) return;
+      iceServers = list;
+      if (peer && peer.options) peer.options.config = { ...(peer.options.config || {}), iceServers };
+    } catch {}
+  }
+
   function startPeer() {
     clearTimeout(restartTimer);
     const old = peer;
-    const p = (peer = new Peer(peerIdOf(me.code), { debug: 0 }));
+    const p = (peer = new Peer(peerIdOf(me.code), { debug: 0, config: { iceServers } }));
     if (old) { try { old.destroy(); } catch {} }
     // Ereignisse eines alten, ersetzten Peers ignorieren
-    p.on('open', () => { if (p !== peer) return; setNet(true); connectAll(); });
+    p.on('open', () => {
+      if (p !== peer) return;
+      clearTimeout(restartTimer); // Neu verbinden hat geklappt: Peer nicht mehr ersetzen
+      setNet(true); connectAll(); refreshIce();
+    });
     p.on('connection', (conn) => {
       if (p !== peer) { conn.close(); return; }
       if (conn.peer.startsWith(LOGIN_PREFIX)) login.incoming(conn); // neues Gerät will sich anmelden
@@ -373,7 +401,18 @@
     });
   }
   let restartTimer = null;
-  function restartPeer(ms) { clearTimeout(restartTimer); restartTimer = setTimeout(startPeer, ms); }
+  function restartPeer(ms) {
+    clearTimeout(restartTimer);
+    restartTimer = setTimeout(() => {
+      // Während eines Anrufs den Peer nicht ersetzen (das würde den Anruf beenden), nur neu mit dem Server verbinden
+      if (calls.active() && peer && !peer.destroyed) {
+        try { if (peer.disconnected) peer.reconnect(); } catch {}
+        restartPeer(10000);
+        return;
+      }
+      startPeer();
+    }, ms);
+  }
 
   function connectTo(code) {
     if (!peer || !peer.open || code === me.code || isOnline(code) || blocked.includes(code)) return;
@@ -537,7 +576,7 @@
         // Direkt UND über den Briefkasten antworten – falls die direkte Verbindung tot ist
         if (isFriend(code) || sharesGroup(code)) { const h = helloPayload(code); sendTo(code, h); relay.send(code, h).catch(() => {}); }
         break;
-      case 'call-end': case 'call-reject': case 'call-cam': case 'callmiss':
+      case 'call-end': case 'call-reject': case 'call-cam': case 'call-accept': case 'call-ping': case 'callmiss':
         calls.handle(code, data);
         break;
       case 'status': case 'sdel': case 'slist': case 'sget': case 'sreact': case 'sseen':
@@ -6432,8 +6471,9 @@
     function stopTone() { clearInterval(toneTimer); toneTimer = null; }
 
     // ---------- Kamera & Mikrofon ----------
+    const AUDIO = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
     async function getStream(video, facing = 'user') {
-      const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+      const audio = AUDIO;
       if (!video) return navigator.mediaDevices.getUserMedia({ audio });
       try {
         return await navigator.mediaDevices.getUserMedia({ audio, video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } } });
@@ -6510,6 +6550,57 @@
     }
 
     // ---------- Ablauf ----------
+    // Zustände: calling (klingelt beim anderen) · ringing (klingelt bei mir) · connecting (angenommen, Verbindung wird aufgebaut)
+    //           · active (Ton/Bild fließt) · reconnecting (Verbindung kurz weg, wird automatisch neu aufgebaut)
+    const CONNECT_MS = 25000;   // so lange darf der Aufbau nach dem Annehmen dauern
+    const RESUME_MS = 30000;    // so lange wird nach einem Abbruch versucht, die Verbindung zurückzuholen
+    const iceOk = (pc) => !!pc && (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed');
+
+    // Steuerbefehl über die Chat-Verbindung; ist sie gerade nicht offen, kurz weiter versuchen
+    function signal(code, data, tries = 12) {
+      if (sendTo(code, data)) return;
+      connectTo(code);
+      if (tries > 0) setTimeout(() => signal(code, data, tries - 1), 600);
+    }
+
+    // Bildschirm während des Anrufs anlassen (sonst schläft z. B. das iPhone ein und der Anruf bricht ab)
+    let wake = null;
+    async function keepAwake(on) {
+      try {
+        if (on && !wake && navigator.wakeLock && document.visibilityState === 'visible') {
+          const w = await navigator.wakeLock.request('screen');
+          w.addEventListener('release', () => { if (wake === w) wake = null; });
+          if (cur) wake = w; else w.release(); // inzwischen aufgelegt
+        } else if (!on && wake) { const w = wake; wake = null; await w.release(); }
+      } catch {}
+    }
+    document.addEventListener('visibilitychange', () => { if (cur && cur.state !== 'ringing') keepAwake(true); });
+
+    // Mikrofon oder Headset abgezogen: neues Mikrofon holen, der Anruf läuft weiter
+    function watchTracks(c) {
+      c.local.getAudioTracks().forEach((t) => { t.onended = () => replaceAudio(c); });
+    }
+    function senderFor(c, kind) {
+      const pc = c.mc && c.mc.peerConnection;
+      if (!pc) return null;
+      const tr = pc.getTransceivers ? pc.getTransceivers().find((t) => t.receiver && t.receiver.track && t.receiver.track.kind === kind) : null;
+      return tr ? tr.sender : pc.getSenders().find((s) => s.track && s.track.kind === kind) || null;
+    }
+    async function replaceAudio(c) {
+      if (cur !== c) return;
+      let t;
+      try { t = (await navigator.mediaDevices.getUserMedia({ audio: AUDIO })).getAudioTracks()[0]; }
+      catch { toast('⚠️ Mikrofon getrennt'); return; }
+      if (cur !== c) { t.stop(); return; }
+      t.enabled = !c.muted;
+      t.onended = () => replaceAudio(c);
+      c.local.getAudioTracks().forEach((o) => c.local.removeTrack(o));
+      c.local.addTrack(t);
+      const s = senderFor(c, 'audio');
+      if (s) { try { await s.replaceTrack(t); } catch (e) { console.warn('Mikrofon wechseln:', e); } }
+      toast('🎤 Mikrofon gewechselt');
+    }
+
     async function start(code, video) {
       if (cur) return;
       if (!hasMedia()) { toast('⚠️ Anrufe werden hier nicht unterstützt.'); return; }
@@ -6518,63 +6609,138 @@
       cur = { id: crypto.randomUUID(), code, video, dir: 'out', state: 'calling', muted: false, camOn: video, facing: 'user', camIdx: 0 };
       const me_ = cur;
       openUI();
+      keepAwake(true);
       setState('Kamera und Mikrofon werden gestartet…');
-      try { cur.local = await getStream(video); }
-      catch (e) { mediaError(e); cur = null; closeUI(0); return; }
-      if (cur !== me_) { stopStream(me_.local); return; } // inzwischen abgebrochen
-      cur.camOn = video && cur.local.getVideoTracks().length > 0;
+      connectTo(code); // Chat-Verbindung für Auflegen, Ablehnen, Kamera aus
+      let local;
+      try { [local] = await Promise.all([getStream(video), refreshIce()]); }
+      catch (e) { mediaError(e); if (cur === me_) { cur = null; keepAwake(false); closeUI(0); } return; }
+      if (cur !== me_) { stopStream(local); return; } // inzwischen abgebrochen oder Gegenanruf angenommen
+      cur.local = local;
+      watchTracks(cur);
+      cur.camOn = video && local.getVideoTracks().length > 0;
       renderVideo(); renderButtons(); checkFlip();
       setState('Ruft an…');
-      connectTo(code);
-      const mc = peer.call(peerIdOf(code), cur.local, { metadata: { callId: cur.id, video } });
+      const mc = peer && peer.open ? peer.call(peerIdOf(code), local, { metadata: { callId: cur.id, video } }) : null;
       if (!mc) { end('unreachable'); return; }
-      bind(mc);
+      bind(mc, cur);
       startTone(false);
-      cur.ringTimer = setTimeout(() => { if (cur === me_ && cur.state !== 'active') end('noanswer'); }, RING_MS);
+      cur.ringTimer = setTimeout(() => { if (cur === me_ && cur.state === 'calling') end('noanswer'); }, RING_MS);
       stats.calls = (stats.calls || 0) + 1;
       saveMeta(); checkAchievements();
     }
 
-    function bind(mc) {
-      cur.mc = mc;
-      const c = cur;
+    // Ereignisse einer Medienverbindung. Nach einem Wiederaufbau gibt es eine neue, die alte wird ignoriert.
+    function bind(mc, c) {
+      c.mc = mc;
+      const mine = () => cur === c && c.mc === mc;
       mc.on('stream', (remote) => {
-        if (cur !== c) return;
-        cur.remote = remote;
+        if (!mine()) return;
+        c.remote = remote;
         remote.onaddtrack = () => renderVideo();
-        if (cur.state !== 'active') active();
+        if (c.state === 'calling') { connecting(c); armConnect(c); }
         renderVideo();
+        mediaUp(c);
       });
-      mc.on('close', () => { if (cur === c) end(cur.state === 'ringing' ? 'canceled' : 'remote'); });
-      mc.on('error', () => { if (cur === c) end('error'); });
+      // PeerJS schließt die Verbindung selbst, wenn ICE scheitert: dann neu aufbauen statt auflegen
+      mc.on('close', () => { if (mine()) connLost(c); });
+      mc.on('error', () => { if (mine()) connLost(c); });
       watchIce(mc, c);
     }
     function watchIce(mc, c) {
       const pc = mc.peerConnection;
-      if (!pc) { setTimeout(() => { if (cur === c && mc.peerConnection) watchIce(mc, c); }, 300); return; }
-      pc.addEventListener('iceconnectionstatechange', () => {
-        if (cur !== c) return;
+      if (!pc) { setTimeout(() => { if (cur === c && c.mc === mc) watchIce(mc, c); }, 300); return; }
+      const on = () => {
+        if (cur !== c || c.mc !== mc) return;
         const s = pc.iceConnectionState;
-        if (s === 'failed') end('lost');
+        if (s === 'connected' || s === 'completed') { clearTimeout(c.lostTimer); mediaUp(c); }
         else if (s === 'disconnected') {
-          if (c.state === 'active') setState('Verbindung wird wiederhergestellt…');
+          // Kurze Aussetzer (z. B. WLAN wackelt) erholen sich oft von selbst
           clearTimeout(c.lostTimer);
-          c.lostTimer = setTimeout(() => { if (cur === c && pc.iceConnectionState !== 'connected' && pc.iceConnectionState !== 'completed') end('lost'); }, 10000);
-        } else if (s === 'connected' || s === 'completed') clearTimeout(c.lostTimer);
-      });
+          c.lostTimer = setTimeout(() => { if (cur === c && c.mc === mc && !iceOk(pc)) connLost(c); }, 3000);
+        } else if (s === 'failed') connLost(c);
+      };
+      pc.addEventListener('iceconnectionstatechange', on);
+      on();
     }
-    function active() {
-      cur.state = 'active';
-      cur.start = Date.now();
-      clearTimeout(cur.ringTimer);
+
+    // Angenommen: Verbindung wird aufgebaut
+    function connecting(c) {
+      if (cur !== c || (c.state !== 'calling' && c.state !== 'ringing')) return;
+      c.state = 'connecting';
+      clearTimeout(c.ringTimer);
       stopTone();
       box.classList.remove('ringing-in');
       $('callIncoming').classList.add('hidden');
       $('callControls').classList.remove('hidden');
+      setState('Verbinde …');
+    }
+    function armConnect(c) {
+      clearTimeout(c.connectTimer);
+      c.connectTimer = setTimeout(() => { if (cur === c && c.state === 'connecting') end('failed'); }, CONNECT_MS);
+    }
+    // Ton/Bild fließt (Verbindung steht und der Stream des anderen ist da)
+    function mediaUp(c) {
+      if (cur !== c || !c.remote || !iceOk(c.mc && c.mc.peerConnection)) return;
+      [c.connectTimer, c.resumeTimer, c.redialTimer, c.lostTimer].forEach(clearTimeout);
+      if (c.state === 'calling' || c.state === 'connecting') active();
+      else if (c.state === 'reconnecting') { c.state = 'active'; box.classList.remove('reconnecting'); tick(c); renderVideo(); }
+    }
+    function active() {
       const c = cur;
-      const upd = () => { if (cur === c && cur.state === 'active') setState(fmtDur(Date.now() - c.start)); };
+      c.state = 'active';
+      c.start = c.start || Date.now();
+      clearTimeout(c.ringTimer); clearTimeout(c.connectTimer);
+      stopTone();
+      box.classList.remove('ringing-in', 'reconnecting');
+      $('callIncoming').classList.add('hidden');
+      $('callControls').classList.remove('hidden');
+      tick(c);
+    }
+    function tick(c) {
+      clearInterval(c.tick);
+      const upd = () => { if (cur === c && c.state === 'active') setState(fmtDur(Date.now() - c.start)); };
       upd();
-      cur.tick = setInterval(upd, 1000);
+      c.tick = setInterval(upd, 1000);
+    }
+
+    // Verbindung weg (Netzwechsel, Funkloch, ICE gescheitert)
+    function connLost(c) {
+      if (cur !== c) return;
+      if (c.state === 'calling') { end('error'); return; }
+      if (c.state === 'connecting') { end('failed'); return; } // kam gar nicht erst zustande
+      if (c.state === 'active') startResume(c);
+    }
+    // Wiederaufbau: Der Anruf bleibt offen, immer derselbe (kleinerer Code) ruft automatisch neu an,
+    // der andere nimmt automatisch an. So rufen nie beide gleichzeitig.
+    function startResume(c) {
+      if (cur !== c || c.state !== 'active') return;
+      c.state = 'reconnecting';
+      box.classList.add('reconnecting');
+      setState('Verbindung wird wiederhergestellt…');
+      signal(c.code, { type: 'call-ping', callId: c.id }, 5); // weckt den anderen, falls er noch nichts gemerkt hat
+      clearTimeout(c.resumeTimer);
+      c.resumeTimer = setTimeout(() => { if (cur === c && c.state === 'reconnecting') end('lost'); }, RESUME_MS);
+      redial(c);
+    }
+    function redial(c) {
+      clearTimeout(c.redialTimer);
+      if (cur !== c || c.state !== 'reconnecting' || me.code > c.code) return;
+      let wait = 1500; // Server-Verbindung noch weg: bald wieder schauen
+      if (peer && peer.open && !peer.disconnected) {
+        const old = c.mc;
+        const mc = peer.call(peerIdOf(c.code), c.local, { metadata: { callId: c.id, video: c.video, resume: true } });
+        if (mc) { bind(mc, c); try { if (old) old.close(); } catch {} wait = 8000; }
+      }
+      c.redialTimer = setTimeout(() => redial(c), wait);
+    }
+    // Der andere baut die Verbindung neu auf: still annehmen
+    function resume(mc) {
+      const c = cur, old = c.mc;
+      if (c.state === 'active') startResume(c); // hier noch nicht bemerkt
+      mc.answer(c.local);
+      bind(mc, c);
+      try { if (old && old !== mc) old.close(); } catch {}
     }
 
     function incoming(mc) {
@@ -6582,9 +6748,33 @@
       const meta = mc.metadata || {};
       if (!CODE_RE.test(code) || !isFriend(code) || blocked.includes(code)) { mc.close(); return; }
       const callId = String(meta.callId || '').slice(0, 64);
+      const closeSoon = () => setTimeout(() => { try { mc.close(); } catch {} }, 800);
+      // Wiederaufbau nach einem Verbindungsabbruch
+      if (meta.resume) {
+        if (cur && cur.code === code && cur.id === callId && cur.local && ['active', 'reconnecting', 'connecting'].includes(cur.state)) resume(mc);
+        else { signal(code, { type: 'call-end', callId }, 3); closeSoon(); } // Anruf gibt es hier nicht mehr
+        return;
+      }
+      connectTo(code); // Chat-Verbindung für Auflegen, Ablehnen, Kamera aus
+      // Beide rufen sich gleichzeitig an: nur der Anruf des kleineren Codes bleibt, der andere nimmt ihn an
+      if (cur && cur.code === code && cur.dir === 'out' && cur.state === 'calling') {
+        if (me.code < code) { closeSoon(); return; }
+        const mine = cur;
+        cur = null;
+        clearTimeout(mine.ringTimer); stopTone();
+        try { if (mine.mc) mine.mc.close(); } catch {}
+        const keep = mine.local && mine.video === !!meta.video ? mine.local : null;
+        if (!keep) stopStream(mine.local);
+        cur = { id: callId, code, video: !!meta.video, dir: 'in', state: 'ringing', mc, local: keep, glare: true, muted: false, camOn: !!meta.video, facing: 'user', camIdx: 0 };
+        const c = cur;
+        mc.on('close', () => { if (cur === c && c.state === 'ringing') end('canceled'); });
+        openUI();
+        accept();
+        return;
+      }
       if (cur) {
         // Besetzt
-        sendTo(code, { type: 'call-reject', callId, busy: true });
+        signal(code, { type: 'call-reject', callId, busy: true });
         setTimeout(() => { try { mc.close(); } catch {} }, 800);
         systemMessage('u:' + code, `${kindText(!!meta.video)} verpasst (du warst in einem anderen Anruf)`);
         unread['u:' + code] = (unread['u:' + code] || 0) + 1;
@@ -6615,27 +6805,28 @@
     async function accept() {
       if (!cur || cur.dir !== 'in' || cur.state !== 'ringing') return;
       const c = cur;
-      stopTone();
-      clearTimeout(cur.ringTimer);
-      cur.state = 'connecting';
-      box.classList.remove('ringing-in');
-      $('callIncoming').classList.add('hidden');
-      $('callControls').classList.remove('hidden');
-      setState('Verbinde …');
-      try { cur.local = await getStream(cur.video); }
-      catch (e) { mediaError(e); if (cur === c) decline(); return; }
-      if (cur !== c) { stopStream(c.local); return; }
-      cur.camOn = cur.video && cur.local.getVideoTracks().length > 0;
+      connecting(c);
+      c.accepted = true;
+      keepAwake(true);
+      if (!c.local) {
+        let local;
+        try { [local] = await Promise.all([getStream(c.video), refreshIce()]); }
+        catch (e) { mediaError(e); if (cur === c) decline(); return; }
+        if (cur !== c) { stopStream(local); return; }
+        c.local = local;
+      }
+      watchTracks(c);
+      c.camOn = c.video && c.local.getVideoTracks().length > 0;
       renderVideo(); renderButtons(); checkFlip();
-      bind(cur.mc);
-      cur.mc.answer(cur.local);
-      watchIce(cur.mc, c);
-      stats.calls = (stats.calls || 0) + 1;
-      saveMeta(); checkAchievements();
+      c.mc.answer(c.local);
+      bind(c.mc, c);
+      armConnect(c);
+      signal(c.code, { type: 'call-accept', callId: c.id }); // beim Anrufer: „Verbinde …“ statt weiter klingeln
+      if (!c.glare) { stats.calls = (stats.calls || 0) + 1; saveMeta(); checkAchievements(); }
     }
     function decline() {
       if (!cur) return;
-      sendTo(cur.code, { type: 'call-reject', callId: cur.id });
+      signal(cur.code, { type: 'call-reject', callId: cur.id });
       end('declined');
     }
 
@@ -6644,18 +6835,26 @@
       if (!cur) return;
       const c = cur;
       cur = null;
-      clearTimeout(c.ringTimer); clearTimeout(c.lostTimer); clearInterval(c.tick);
+      [c.ringTimer, c.lostTimer, c.connectTimer, c.resumeTimer, c.redialTimer].forEach(clearTimeout); clearInterval(c.tick);
       stopTone();
-      if (!['remote', 'canceled', 'rejected', 'busy', 'declined', 'unreachable'].includes(reason)) sendTo(c.code, { type: 'call-end', callId: c.id });
+      keepAwake(false);
+      if (!['remote', 'canceled', 'rejected', 'busy', 'declined', 'unreachable'].includes(reason)) signal(c.code, { type: 'call-end', callId: c.id });
       try { if (c.mc) c.mc.close(); } catch {}
       stopStream(c.local);
       playAudioOnly(null);
       remoteEl.srcObject = null; localEl.srcObject = null;
       const chatId = 'u:' + c.code, kind = kindText(c.video);
       let msg = null, shown = 'Anruf beendet';
-      if (c.start) msg = `${kind} · ${fmtDur(Date.now() - c.start)}`;
-      else if (c.dir === 'in') {
+      if (c.start) {
+        msg = `${kind} · ${fmtDur(Date.now() - c.start)}`;
+        if (reason === 'lost') shown = 'Verbindung verloren';
+      } else if (reason === 'failed') {
+        // Angenommen, aber Ton/Bild kam nie durch: meist blockiert das Netzwerk direkte Verbindungen
+        msg = `${kind} · Verbindung fehlgeschlagen`; shown = 'Verbindung fehlgeschlagen';
+        toast('📶 Die Verbindung kam nicht zustande. Manche Netzwerke (z. B. Schule oder Firma) blockieren Anrufe. Versuch es in einem anderen WLAN oder mit mobilen Daten.');
+      } else if (c.dir === 'in') {
         if (reason === 'declined') { msg = `${kind} abgelehnt`; shown = 'Abgelehnt'; }
+        else if (c.accepted) { msg = `${kind} · abgebrochen`; shown = 'Abgebrochen'; }
         else {
           msg = `${kind} verpasst`;
           unread[chatId] = (unread[chatId] || 0) + 1;
@@ -6679,7 +6878,7 @@
       setTimeout(() => {
         if (cur) return; // schon ein neuer Anruf
         box.classList.add('hidden');
-        box.classList.remove('has-video', 'ringing-in', 'swapped');
+        box.classList.remove('has-video', 'ringing-in', 'swapped', 'reconnecting');
       }, delay);
     }
 
@@ -6734,7 +6933,7 @@
       track.enabled = c.camOn;
       if (old) c.local.removeTrack(old);
       c.local.addTrack(track);
-      const sender = c.mc && c.mc.peerConnection && c.mc.peerConnection.getSenders().find((s) => s.track === old || (s.track && s.track.kind === 'video') || (!s.track && old));
+      const sender = senderFor(c, 'video');
       if (sender) { try { await sender.replaceTrack(track); } catch (e) { console.warn('Kamera wechseln:', e); } }
       // Neues Objekt erzwingen, damit das Vorschaubild neu startet
       localEl.srcObject = null;
@@ -6786,6 +6985,14 @@
         case 'call-cam':
           if (sameCall) { cur.remoteCam = !!data.on; renderVideo(); }
           break;
+        case 'call-accept':
+          if (sameCall && cur.dir === 'out' && cur.state === 'calling') { connecting(cur); armConnect(cur); }
+          break;
+        case 'call-ping':
+          // Der andere hat die Verbindung verloren: Gibt es den Anruf hier noch, ebenfalls neu aufbauen, sonst Bescheid geben
+          if (sameCall && data.callId) startResume(cur);
+          else if (data.callId) sendTo(code, { type: 'call-end', callId: data.callId });
+          break;
         case 'callmiss': {
           if (!isFriend(code)) return;
           const chatId = 'u:' + code;
@@ -6801,6 +7008,8 @@
     function unavailable(code) {
       if (cur && cur.dir === 'out' && cur.code === code && cur.state === 'calling' && cur.mc) end('unreachable');
     }
+    // App wird geschlossen oder neu geladen: richtig auflegen, damit der andere nicht ins Leere wartet
+    window.addEventListener('pagehide', () => { if (cur) { if (cur.dir === 'in' && cur.state === 'ringing') decline(); else end('hangup'); } });
     return { start, incoming, handle, unavailable, active: () => !!cur };
   })();
 
@@ -7646,6 +7855,12 @@
     async function isAdmin() {
       try { return !!(await (await fetch(`${url()}/v1/isadmin/${me.code}`)).json()).admin; } catch { return false; }
     }
+    // TURN-Zugang für Anrufe (nur wenn auf dem Server eingerichtet). Signiert, damit nur WhatsUp-Nutzer ihn bekommen.
+    async function ice() {
+      if (!ready || !ident) return undefined;
+      const ts = Date.now();
+      return post('/v1/ice', { code: me.code, ts, sig: await sign(`ice|${me.code}|${ts}`) });
+    }
     // Weltweite Zahlen: { counts: { id: Anzahl }, players }. Höchstens alle 5 Minuten neu laden.
     let achStatsCache = store.load('achStats', null);
     let achStatsLoading = null;
@@ -7714,7 +7929,7 @@
     window.addEventListener('online', () => poll());
 
     return {
-      start, poll, send, setupPush, pushTest, saveNames, renderRelayStatus, reportAchievements, achStats, reportSeen, adminUsers, isAdmin,
+      start, poll, send, setupPush, pushTest, saveNames, renderRelayStatus, reportAchievements, achStats, reportSeen, adminUsers, isAdmin, ice,
       newIdentity, rotationRequest, rotate, serverHasKey, enabled, url, backupKeys, importBackupKeys,
       canSend: (code) => ready && enabled() && known[code] !== false,
       ready: () => ready && enabled(),

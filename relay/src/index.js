@@ -70,6 +70,24 @@ export default {
       if (!admins(env).includes(code) || !freshTs(Number(b.ts)) || !(await codeSigned(env, code, `adminusers|${code}|${b.ts}`, b.sig))) return fail(403, 'forbidden');
       return env.ACHSTATS.get(env.ACHSTATS.idFromName('global')).fetch('https://stats/users');
     }
+    // TURN-Zugang für Anrufe (Cloudflare Realtime), damit sie auch durch strenge Netzwerke gehen.
+    // Nur aktiv mit den Secrets TURN_KEY_ID und TURN_KEY_TOKEN. Nur für registrierte Codes (Signatur), Zugang gilt 24 Stunden.
+    if (parts[1] === 'ice' && req.method === 'POST') {
+      const id = clean(env.TURN_KEY_ID), token = clean(env.TURN_KEY_TOKEN);
+      if (!id || !token) return json({ iceServers: [] });
+      const b = await req.json().catch(() => ({}));
+      const code = String(b.code || '').toUpperCase();
+      if (!freshTs(Number(b.ts)) || !(await codeSigned(env, code, `ice|${code}|${b.ts}`, b.sig))) return fail(403, 'forbidden');
+      try {
+        const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(id)}/credentials/generate-ice-servers`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ttl: 86400 }),
+        });
+        const d = r.ok ? await r.json() : {};
+        return json({ iceServers: Array.isArray(d.iceServers) ? d.iceServers : [] });
+      } catch { return json({ iceServers: [] }); }
+    }
     if (parts[1] === 'achuser') {
       const c = String(parts[2] || '').toUpperCase();
       if (!CODE_RE.test(c)) return fail(400, 'bad code');

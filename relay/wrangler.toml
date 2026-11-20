@@ -37,3 +37,4 @@ VAPID_SUBJECT = "https://github.com/Jeremy-Jud/whatsup"
 # UpReels: Codes, die jedes Reel und jeden Kommentar löschen dürfen (Komma-getrennt)
 ADMIN_CODES = "V5KGWG,QM3UNP"
 # Geheime Werte (nicht hier!): VAPID_PUBLIC, VAPID_PRIVATE  ->  wrangler secret put …
+# Optional für Anrufe durch strenge Netzwerke (Cloudflare Realtime TURN, kostet ca. 0,05 $/GB weitergeleitet): TURN_KEY_ID, TURN_KEY_TOKEN

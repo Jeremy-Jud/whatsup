@@ -524,6 +524,11 @@ button.primary:disabled { opacity: .35; cursor: default; }
 .call-info b { font-size: 20px; font-weight: 600; }
 #callState { color: rgba(255, 255, 255, .7); font-size: 13.5px; font-variant-numeric: tabular-nums; }
 .call.ringing-in .call-info .avatar { animation: callPulse 1.6s ease-out infinite; }
+/* Verbindung kurz weg: Bild unscharf, Hinweis blinkt, bis es wieder läuft */
+.call-remote { transition: filter .3s; }
+.call.reconnecting .call-remote { filter: blur(8px) brightness(.6); }
+.call.reconnecting #callState { animation: callBlink 1.2s ease-in-out infinite; }
+@keyframes callBlink { 50% { opacity: .4; } }
 @keyframes callPulse { 0% { box-shadow: 0 0 0 0 rgba(48, 164, 108, .55); } 100% { box-shadow: 0 0 0 26px rgba(48, 164, 108, 0); } }
 /* Im Videoanruf: Name klein oben statt großem Bild */
 .call.has-video .call-info { flex: 0; justify-content: flex-start; padding-top: 16px; text-shadow: 0 1px 6px rgba(0, 0, 0, .6); }

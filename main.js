@@ -103,7 +103,8 @@ function createWindow() {
       cb(wc === win.webContents && (details.mediaTypes || []).every((t) => t === 'audio' || t === 'video'));
       return;
     }
-    cb(permission === 'notifications' || permission === 'clipboard-sanitized-write');
+    // screen-wake-lock: Bildschirm bleibt während eines Anrufs an
+    cb(permission === 'notifications' || permission === 'clipboard-sanitized-write' || permission === 'screen-wake-lock');
   });
 }
 

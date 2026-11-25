@@ -93,3 +93,35 @@ test('Base64 auch für große Daten', () => {
   const big = new Uint8Array(200000).map((_, i) => i % 256);
   assert.deepEqual(lib.unb64(lib.b64(big)), big);
 });
+
+test('Heartbeat: Online nur mit frischem Lebenszeichen (neue Versionen)', () => {
+  const now = 100000;
+  assert.equal(lib.connAlive(null, now), false);
+  assert.equal(lib.connAlive({ open: false, hb: true, rx: now }, now), false);
+  // Ältere Version ohne Heartbeat: offen = online
+  assert.equal(lib.connAlive({ open: true, hb: false, rx: 0 }, now), true);
+  assert.equal(lib.connAlive({ open: true, hb: true, rx: now - 1000 }, now), true);
+  assert.equal(lib.connAlive({ open: true, hb: true, rx: now - lib.STALE_MS - 1 }, now), false);
+});
+
+test('Heartbeat: Verbindung erst nach unbeantwortetem Ping als tot', () => {
+  const now = 100000, old = now - lib.STALE_MS - 1;
+  assert.equal(lib.connDead({ open: false }, now), true);
+  assert.equal(lib.connDead({ open: true, hb: false, rx: 0 }, now), false);
+  assert.equal(lib.connDead({ open: true, hb: true, rx: now }, now), false);
+  // Still, aber noch kein Ping gesendet (z. B. gerade aus dem Hintergrund zurück): erst nachfragen
+  assert.equal(lib.connDead({ open: true, hb: true, rx: old }, now), false);
+  assert.equal(lib.connDead({ open: true, hb: true, rx: old, ping: now - 1000 }, now), false);
+  assert.equal(lib.connDead({ open: true, hb: true, rx: old, ping: now - lib.PROBE_MS }, now), true);
+});
+
+test('Rückkehr in den Vordergrund: Signal-Server neu verbinden', () => {
+  assert.equal(lib.needsSignalReconnect(0, false), true);
+  assert.equal(lib.needsSignalReconnect(2000, true), false);
+  assert.equal(lib.needsSignalReconnect(60000, true), true);
+});
+
+test('withTimeout: hängende Promise blockiert nicht', async () => {
+  assert.equal(await lib.withTimeout(new Promise(() => {}), 20, 'zu'), 'zu');
+  assert.equal(await lib.withTimeout(Promise.resolve(7), 1000, 'zu'), 7);
+});

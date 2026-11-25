@@ -782,6 +782,7 @@
     });
 
     stats.sent++;
+    xmas.countSent(); // Weihnachts-Event
     if (typeof games === 'object') games.nudge();
     if (chatId.startsWith('g:')) stats.groupSent++;
     if (media) { if (media.kind === 'audio') stats.voices = (stats.voices || 0) + 1; else if (media.kind === 'video') stats.videos = (stats.videos || 0) + 1; else if (media.kind === 'file') stats.files = (stats.files || 0) + 1; else if (media.kind === 'gif') stats.gifs++; else stats.images++; }
@@ -1802,7 +1803,7 @@
     }
     // Was ist das Geschenk? Name, Art, Beschreibung, Vorschau
     function giftInfo(g) {
-      if (g.kind === 'frame' && FRAMES[g.item]) return { name: FRAMES[g.item].name, type: 'Profilrahmen', desc: FRAMES[g.item].pro ? 'Ein animierter Rahmen für dein Profilbild.' : 'Ein exklusiver Rahmen für dein Profilbild.', preview: () => avatarEl(me.name, me.avatar, me.code, 'xl', null, g.item) };
+      if (g.kind === 'frame' && FRAMES[g.item]) return { name: FRAMES[g.item].name, type: 'Profilrahmen', desc: FRAMES[g.item].event ? 'Die exklusive Belohnung aus dem Weihnachts-Event. Gibt es nie wieder.' : FRAMES[g.item].pro ? 'Ein animierter Rahmen für dein Profilbild.' : 'Ein exklusiver Rahmen für dein Profilbild.', preview: () => avatarEl(me.name, me.avatar, me.code, 'xl', null, g.item) };
       if (g.kind === 'banner' && BANNERS[g.item]) return { name: BANNERS[g.item].name, type: 'Status-Banner', desc: BANNERS[g.item].anim ? 'Ein Banner um deinen Status, dessen Farben fließen.' : 'Ein farbiges Banner um deinen Status.', preview: () => bannerEl(me.status || me.name, g.item) };
       const d = DESIGNS.find((x) => x[0] === g.item);
       if (g.kind === 'design' && d) {
@@ -1860,7 +1861,7 @@
         const present = el('button', 'gift-present', '🎁');
         present.type = 'button';
         present.title = 'Auspacken';
-        stage.append(el('div', 'gift-title', 'Du hast ein Geschenk bekommen!'), el('div', 'gift-from', `von ${from}`), present, el('div', 'muted', 'Tippe auf das Geschenk, um es auszupacken'));
+        stage.append(el('div', 'gift-title', g.title || 'Du hast ein Geschenk bekommen!'), el('div', 'gift-from', `von ${from}`), present, el('div', 'muted', 'Tippe auf das Geschenk, um es auszupacken'));
         box.appendChild(stage);
         confetti();
         present.onclick = () => {
@@ -1879,8 +1880,8 @@
               const b = acts.querySelector('.primary');
               b.disabled = true;
               try {
-                await relay.pro.claim(g.id);
-                if (g.kind === 'pro') { setMine('paid'); refresh(); }
+                if (g.onClaim) g.onClaim(); // lokal (z. B. Event-Belohnung)
+                else if ((await relay.pro.claim(g.id)) && g.kind === 'pro') { setMine('paid'); refresh(); }
                 else { owned.add(g.kind + ':' + g.item); store.save('giftOwned', [...owned]); scheduleRender(); if (view === 'viewSettings') renderProfAvatar(); }
                 closeModal();
                 toast(`🎁 ${info.name} gehört jetzt dir! ${where(g)}`, true);
@@ -2090,7 +2091,114 @@
         refresh();
       });
     }
-    return { isPro, has, star, open, announce, setAdmin, checkAdmin, hasDesign, ownedList: () => [...owned], isAdmin: () => admin, refresh, refreshOthers, refreshOthersSoon, renderRow, status: () => mine.status };
+    return { queueLocal: (g) => queueGifts([g]), isPro, has, star, open, announce, setAdmin, checkAdmin, hasDesign, ownedList: () => [...owned], isAdmin: () => admin, refresh, refreshOthers, refreshOthersSoon, renderRow, status: () => mine.status };
+  })();
+
+  // ================= Gemeinschafts-Event: Weihnachten 2026 =================
+  // Alle zusammen verschicken Nachrichten. Jede gesendete Nachricht zählt (die App meldet nur die Anzahl, signiert).
+  // Wird das Ziel bis zum 25. Dezember erreicht, bekommt jeder, der mitgemacht hat, die Weihnachtsmütze (Rahmen „xmashat“).
+  // Die gibt es danach nie wieder.
+  const xmas = (() => {
+    const ID = 'xmas2026', REWARD = 'frame:xmashat';
+    const DEF = { goal: 10000, start: Date.UTC(2026, 10, 25), end: Date.UTC(2026, 11, 24, 23) }; // Ende: 25.12. 00:00 Schweizer Zeit
+    let st = store.load('event.' + ID, null);          // letzter Stand vom Server
+    let sent = store.load('eventSent.' + ID, 0);       // eigene Nachrichten während des Events (dieses Gerät)
+    let owned = store.load('eventOwned', []);          // eingeforderte Event-Belohnungen
+    const conf = () => Object.assign({}, DEF, st || {});
+    const running = () => { const c = conf(); return Date.now() >= c.start && Date.now() < c.end; };
+    const visible = () => { const c = conf(); return Date.now() >= c.start && Date.now() < c.end + 14 * 864e5; };
+    const fmt = (n) => Math.floor(n).toLocaleString('de-CH');
+
+    let repT = 0, busy = false;
+    function countSent() {
+      if (!running()) return;
+      sent++;
+      store.save('eventSent.' + ID, sent);
+      clearTimeout(repT);
+      repT = setTimeout(report, 15000); // gesammelt melden
+    }
+    async function report() {
+      clearTimeout(repT);
+      if (!sent || !relay.ready() || !running()) return;
+      try { await relay.event.report(ID, sent); } catch {}
+      refresh();
+    }
+    async function refresh() {
+      if (busy || !me) return;
+      busy = true;
+      try {
+        const d = await relay.event.status(ID, me.code);
+        if (d && d.goal) { st = d; store.save('event.' + ID, st); }
+      } catch {} finally { busy = false; }
+      applyTab(); render(); checkReward();
+    }
+    // Ziel erreicht und mitgemacht: Geschenk mit Konfetti
+    function checkReward() {
+      const ready = !!(st && st.eligible && !owned.includes(REWARD));
+      $('eventDot').classList.toggle('hidden', !ready);
+      if (!ready) return;
+      pro.queueLocal({
+        id: 'event-' + ID, kind: 'frame', item: 'xmashat', from: '🎄 Weihnachts-Event', title: 'Ihr habt es geschafft!',
+        onClaim: () => { owned = [...owned, REWARD]; store.save('eventOwned', owned); $('eventDot').classList.add('hidden'); scheduleRender(); if (view === 'viewSettings') renderProfAvatar(); },
+      });
+    }
+    function applyTab() {
+      const v = visible();
+      $('tabEvent').classList.toggle('hidden', !v);
+      if (!v && view === 'viewEvent') { show('viewList'); render(); }
+    }
+
+    // ---------- Seite: Baum, Fortschritt, Countdown ----------
+    // Lichterkugeln am Baum (leuchten und funkeln die ganze Zeit)
+    const ORN = [[100, 50], [88, 72], [112, 72], [100, 86], [74, 108], [100, 112], [126, 106], [60, 130], [84, 134], [110, 132], [136, 128], [150, 136],
+      [70, 160], [100, 158], [130, 162], [58, 180], [84, 178], [116, 180], [142, 176], [46, 198], [72, 200], [100, 196], [128, 200], [154, 196]];
+    const COLS = ['#ef4444', '#facc15', '#3b82f6', '#f472b6', '#a855f7', '#22d3ee'];
+    function drawTree(pct, reached) {
+      const box = $('evTree');
+      if (!box.firstChild) {
+        // feste Grafik, keine Nutzerdaten
+        box.innerHTML = `<svg viewBox="0 0 200 250" aria-hidden="true">
+          <defs><linearGradient id="evGreen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34d399"/><stop offset="1" stop-color="#047857"/></linearGradient></defs>
+          <rect x="89" y="208" width="22" height="26" rx="3" fill="#92400e"/>
+          <polygon points="100,30 58,92 142,92" fill="url(#evGreen)"/>
+          <polygon points="100,62 42,140 158,140" fill="url(#evGreen)"/>
+          <polygon points="100,100 26,212 174,212" fill="url(#evGreen)"/>
+          <path d="M70 84Q100 98 128 80M54 128Q100 146 148 124M38 196Q100 218 164 192" fill="none" stroke="#fde68a" stroke-width="2" stroke-dasharray="2 4" opacity=".75"/>
+          ${ORN.map(([x, y], i) => `<circle class="ev-orn" cx="${x}" cy="${y}" r="5.5" style="--c:${COLS[i % COLS.length]};--d:${((i * 0.37) % 2).toFixed(2)}s"/>`).join('')}
+          <path class="ev-star" d="M100 10L104 21L116 21L106.5 28L110 39.5L100 32.5L90 39.5L93.5 28L84 21L96 21Z"/>
+          <rect x="30" y="218" width="32" height="24" rx="3" fill="#ef4444"/><rect x="43" y="218" width="6" height="24" fill="#fde68a"/>
+          <rect x="140" y="222" width="30" height="20" rx="3" fill="#3b82f6"/><rect x="152" y="222" width="6" height="20" fill="#fff"/>
+        </svg>`;
+      }
+      // Beleuchtung brennt von Anfang an; der Stern an der Spitze geht an, sobald das Ziel erreicht ist
+      box.querySelectorAll('.ev-orn:not(.on)').forEach((o) => o.classList.add('on'));
+      box.classList.toggle('done', reached);
+    }
+    function render() {
+      if (view !== 'viewEvent' || !me) return;
+      const c = conf(), total = st ? st.total : 0, pct = Math.min(100, (total / c.goal) * 100);
+      const reached = total >= c.goal, now = Date.now(), ended = now >= c.end;
+      const mine = Math.max(sent, st ? st.mine || 0 : 0);
+      $('evFill').style.width = pct.toFixed(1) + '%';
+      $('evFill').classList.toggle('done', reached);
+      $('evPct').textContent = (pct >= 100 ? '100' : pct < 10 ? pct.toFixed(1).replace('.', ',') : String(Math.floor(pct))) + ' %';
+      $('evCount').textContent = `${fmt(total)} / ${fmt(c.goal)} Nachrichten`;
+      const left = c.end - now;
+      if (ended) { $('evDays').textContent = '🎄'; $('evDaysLabel').textContent = 'vorbei'; }
+      else if (left > 864e5) { const d = Math.ceil(left / 864e5); $('evDays').textContent = d; $('evDaysLabel').textContent = d === 1 ? 'Tag bis Weihnachten' : 'Tage bis Weihnachten'; }
+      else { const h = Math.max(1, Math.ceil(left / 36e5)); $('evDays').textContent = h; $('evDaysLabel').textContent = h === 1 ? 'Stunde noch' : 'Stunden noch'; }
+      $('evPeople').textContent = st ? fmt(st.participants) : '–';
+      $('evMine').textContent = fmt(mine);
+      $('evSub').textContent = !ended
+        ? (reached ? '🎉 Ziel erreicht! Am 25. Dezember bekommt jeder, der mitgemacht hat, die Weihnachtsmütze.' : `Schreibt zusammen ${fmt(c.goal)} Nachrichten bis Weihnachten!`)
+        : !reached ? 'Leider nicht geschafft. Danke fürs Mitmachen!'
+        : owned.includes(REWARD) ? '🎁 Die Weihnachtsmütze gehört dir! Auswählen unter Du → Personalisieren.'
+        : mine > 0 ? '🎁 Geschafft! Deine Weihnachtsmütze wartet auf dich.' : 'Geschafft! Leider hast du keine Nachricht beigetragen.';
+      $('evRewardAv').replaceChildren(avatarEl(me.name, me.avatar, me.code, 'lg', null, 'xmashat'));
+      drawTree(pct, reached);
+    }
+    function open() { render(); report(); refresh(); }
+    return { countSent, refresh, report, render, open, applyTab, ownedList: () => owned, visible };
   })();
 
   // Einlöse-Codes (Liste mit allen Codes: CODES.md im Repo). Groß/klein, Leerzeichen und Bindestriche egal.
@@ -2105,7 +2213,7 @@
     NEONNACHT: ['banner:neon'],
     GOLDRAUSCH: ['banner:gold'],
     STERNENSTAUB: ['banner:galaxy'],
-    WHATSUPVIP: [...Object.keys(FRAMES).filter((f) => FRAMES[f].locked && !FRAMES[f].pro).map((f) => 'frame:' + f), ...Object.keys(BANNERS).filter((b) => !BANNERS[b].pro).map((b) => 'banner:' + b)],
+    WHATSUPVIP: [...Object.keys(FRAMES).filter((f) => FRAMES[f].locked && !FRAMES[f].pro && !FRAMES[f].event).map((f) => 'frame:' + f), ...Object.keys(BANNERS).filter((b) => !BANNERS[b].pro).map((b) => 'banner:' + b)],
   };
   let redeemed = store.load('redeemed', []);
   let challDone = store.load('challDone', 0); // geschaffte Wochen-Challenges (vom Server)
@@ -2115,11 +2223,12 @@
     Object.keys(BANNERS).forEach((b) => { if (BANNERS[b].challenge && challDone >= BANNERS[b].challenge) r.add('banner:' + b); });
     // Pro: alle Rahmen und Banner (außer den Challenge-Belohnungen, die erspielt man)
     if (pro.isPro()) {
-      Object.keys(FRAMES).forEach((f) => { if (FRAMES[f].locked && !FRAMES[f].challenge) r.add('frame:' + f); });
+      Object.keys(FRAMES).forEach((f) => { if (FRAMES[f].locked && !FRAMES[f].challenge && !FRAMES[f].event) r.add('frame:' + f); });
       Object.keys(BANNERS).forEach((b) => { if (!BANNERS[b].challenge) r.add('banner:' + b); });
     }
     // Geschenke vom Admin
     pro.ownedList().forEach((k) => r.add(k));
+    xmas.ownedList().forEach((k) => r.add(k)); // Event-Belohnungen
     return r;
   };
   // Neue Zahl geschaffter Challenges übernehmen; neu freigeschaltete Belohnungen melden
@@ -2190,14 +2299,14 @@
 
   let view = 'viewSetup';
   let activeChat = null;
-  const TITLES = { viewList: 'WhatsUp', viewChat: 'WhatsUp', viewSettings: 'Einstellungen', viewAchievements: 'Erfolge', viewSetup: 'WhatsUp', viewStatus: 'Status', viewReels: 'UpReels' };
-  const TABS = ['viewStatus', 'viewReels', 'viewList', 'viewSettings'];
+  const TITLES = { viewList: 'WhatsUp', viewChat: 'WhatsUp', viewSettings: 'Einstellungen', viewAchievements: 'Erfolge', viewSetup: 'WhatsUp', viewStatus: 'Status', viewReels: 'UpReels', viewEvent: 'Event' };
+  const TABS = ['viewStatus', 'viewReels', 'viewEvent', 'viewList', 'viewSettings'];
   let lastTab = 'viewList';
 
   function show(v) {
     view = v;
     if (TABS.includes(v)) lastTab = v;
-    ['viewSetup', 'viewList', 'viewChat', 'viewSettings', 'viewAchievements', 'viewStatus', 'viewReels'].forEach((x) => $(x).classList.toggle('hidden', x !== v));
+    ['viewSetup', 'viewList', 'viewChat', 'viewSettings', 'viewAchievements', 'viewStatus', 'viewReels', 'viewEvent'].forEach((x) => $(x).classList.toggle('hidden', x !== v));
     if (v !== 'viewReels') { reels.pauseAll(); reels.closeSheet(); }
     document.documentElement.classList.toggle('in-reels', v === 'viewReels');
     $('tabbar').classList.toggle('hidden', !TABS.includes(v));
@@ -2218,6 +2327,7 @@
     if (view === 'viewReels') { show('viewList'); render(); }
   }
   applyReels();
+  xmas.applyTab();
 
   let renderQueued = false;
   function scheduleRender() {
@@ -2234,6 +2344,7 @@
     if (view === 'viewStatus') stories.renderList();
     if (view === 'viewChat') renderChat();
     if (view === 'viewAchievements') renderAchievements();
+    if (view === 'viewEvent') xmas.render();
   }
 
   // Leiste unten: ungelesene Chats, neue Status, eigenes Profilbild
@@ -2254,6 +2365,7 @@
       if (v === 'viewSettings') { if (view !== 'viewSettings') openSettings(); return; }
       show(v); render();
       if (v === 'viewReels') reels.openFeed();
+      if (v === 'viewEvent') xmas.open();
     };
   });
 
@@ -4599,7 +4711,7 @@
       let kind = 'frame', item = null;
       const seg = el('div', 'segmented gift-kinds');
       const grid = el('div', 'gift-grid');
-      const items = () => (kind === 'frame' ? Object.keys(FRAMES).filter((f) => FRAMES[f].locked).map((f) => [f, FRAMES[f].name])
+      const items = () => (kind === 'frame' ? Object.keys(FRAMES).filter((f) => FRAMES[f].locked && !FRAMES[f].event).map((f) => [f, FRAMES[f].name])
         : kind === 'banner' ? Object.keys(BANNERS).map((b) => [b, BANNERS[b].name])
         : kind === 'design' ? DESIGNS.filter((d) => d[2] === 'pro').map((d) => [d[0], d[1]])
         : [['pro', 'WhatsUp Pro']]);
@@ -4781,13 +4893,14 @@
     const grid = $('frameGrid');
     grid.replaceChildren();
     [null, ...Object.keys(FRAMES)].forEach((id) => {
-      const locked = frameLocked(id), proOnly = !!(id && FRAMES[id].pro);
-      const b = el('button', 'frame-opt' + (id === draftFrame ? ' active' : '') + (id && FRAMES[id].locked ? ' exclusive' : '') + (locked ? ' locked' : '') + (proOnly ? ' pro-only' : ''));
+      const locked = frameLocked(id), proOnly = !!(id && FRAMES[id].pro), eventOnly = !!(id && FRAMES[id].event);
+      const b = el('button', 'frame-opt' + (id === draftFrame ? ' active' : '') + (id && FRAMES[id].locked ? ' exclusive' : '') + (locked ? ' locked' : '') + (proOnly ? ' pro-only' : '') + (eventOnly ? ' event-only' : ''));
       b.type = 'button';
-      b.title = id ? FRAMES[id].name + (locked ? (proOnly ? ' – mit WhatsUp Pro' : FRAMES[id].challenge ? ` – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges` : ' – mit einem Code oder WhatsUp Pro freischalten') : '') : 'Kein Rahmen';
+      b.title = id ? FRAMES[id].name + (locked ? (eventOnly ? ' – nur aus dem Weihnachts-Event' : proOnly ? ' – mit WhatsUp Pro' : FRAMES[id].challenge ? ` – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges` : ' – mit einem Code oder WhatsUp Pro freischalten') : '') : 'Kein Rahmen';
       b.appendChild(avatarEl(name, draftAvatar, me.code, 'md', null, id));
       b.appendChild(el('span', 'frame-name', id ? FRAMES[id].name : 'Keiner'));
       b.onclick = () => {
+        if (locked && eventOnly) { toast('🎄 Exklusiv aus dem Weihnachts-Event, gibt es nie wieder'); return; }
         if (locked && (proOnly || !FRAMES[id].challenge)) { pro.open(); return; }
         if (locked) { toast(`🔒 Challenge-Belohnung – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges`); return; }
         draftFrame = id; renderProfAvatar(); markProfileDirty(profileDirty());
@@ -8764,6 +8877,15 @@
       const ts = Date.now();
       return post('/v1/pro/' + what, { code: me.code, ts, sig: await sign(text(ts)), ...extra });
     }
+    // Gemeinschafts-Events: Stand (öffentlich) und eigene Nachrichten melden (signiert)
+    const eventApi = {
+      status: async (id, code) => (await fetch(`${url()}/v1/event/${id}?me=${code}`)).json(),
+      report: async (id, sent) => {
+        if (!ready || !ident) throw new Error('not ready');
+        const ts = Date.now();
+        return post(`/v1/event/${id}/report`, { code: me.code, ts, sent, sig: await sign(`eventreport|${me.code}|${ts}|${id}|${sent}`) });
+      },
+    };
     const proApi = {
       list: async (codes) => (await post('/v1/pro/list', { codes })).pro || [],
       status: () => signedPro('status', (ts) => `prostatus|${me.code}|${ts}`),
@@ -8835,20 +8957,22 @@
       reportAchievements();
       setTimeout(reportSeen, 3000); // nach dem Start, wenn die Version bekannt ist
       setTimeout(() => games.reportProgress(), 6000); // Challenge-Fortschritt (Nachrichten, Streak)
-      setTimeout(() => { pro.checkAdmin(); pro.refresh(); pro.refreshOthers(); }, 2000); // WhatsUp Pro: eigener Status und ⭐ der Freunde
+      setTimeout(() => { pro.checkAdmin(); pro.refresh(); pro.refreshOthers(); }, 2000);
+      setTimeout(() => { xmas.report(); xmas.refresh(); }, 3500); // Weihnachts-Event // WhatsUp Pro: eigener Status und ⭐ der Freunde
     }
 
     // Abholen: beim Start, jede Minute, beim Zurückkehren in die App und wenn das Netz wieder da ist
     setInterval(() => poll(), 60000);
     // Wartet eine Pro-Zahlung auf Bestätigung: jede Minute nachschauen; ⭐ der Freunde alle 30 Minuten
     setInterval(() => pro.refresh(), 2 * 60000); // Pro-Status und neue Geschenke
+    setInterval(() => { if (xmas.visible()) xmas.refresh(); }, 5 * 60000); // Stand des Events
     setInterval(() => pro.refreshOthers(), 30 * 60000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
     if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'relay-poll') poll(); });
     window.addEventListener('online', () => poll());
 
     return {
-      start, poll, send, setupPush, pushTest, saveNames, renderRelayStatus, reportAchievements, achStats, reportSeen, adminUsers, isAdmin, ice, pro: proApi,
+      start, poll, send, setupPush, pushTest, saveNames, renderRelayStatus, reportAchievements, achStats, reportSeen, adminUsers, isAdmin, ice, pro: proApi, event: eventApi,
       newIdentity, rotationRequest, rotate, serverHasKey, enabled, url, backupKeys, importBackupKeys,
       canSend: (code) => ready && enabled() && known[code] !== false,
       ready: () => ready && enabled(),

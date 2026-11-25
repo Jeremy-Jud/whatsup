@@ -28,6 +28,7 @@
       <symbol id="i-status" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5M20.5 12a8.5 8.5 0 0 1-8.5 8.5M12 20.5A8.5 8.5 0 0 1 3.5 12" /><path d="M3.5 12A8.5 8.5 0 0 1 12 3.5" stroke-dasharray="2.2 2.6"/><circle cx="12" cy="12" r="3.6"/></symbol>
       <symbol id="i-chats" viewBox="0 0 24 24"><path d="M4 11.5a7 6.2 0 0 1 14 0 7 6.2 0 0 1-9.6 5.8L4.5 19l1.2-3.4A6 6 0 0 1 4 11.5z"/><path d="M20 9.8a5.6 5.6 0 0 1 .6 6.6l.9 2.8-3-1.1"/></symbol>
       <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5A1.5 1.5 0 0 1 5.5 7h2l1.5-2h6l1.5 2h2A1.5 1.5 0 0 1 20 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.5" r="3.5"/></symbol>
+      <symbol id="i-tree" viewBox="0 0 24 24"><path d="M12 2.8l4.2 5.2h-2.4l3.6 5h-2.5l3.6 5.2H5.5l3.6-5.2H6.6l3.6-5H7.8z"/><path d="M12 18.2V21.5"/></symbol>
       <symbol id="i-reels" viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="17" rx="4"/><path d="M4 8h16M8.5 3.7L11 8M13.5 3.7L16 8"/><path d="M10.3 11.2v5.6l4.6-2.8z"/></symbol>
       <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/></symbol>
       <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol>
@@ -355,6 +356,32 @@
     <ul id="statusList" class="list st-list"></ul>
   </section>
 
+  <!-- Gemeinschafts-Event (Weihnachten): alle zusammen schreiben Nachrichten bis zum Ziel -->
+  <section id="viewEvent" class="view hidden">
+    <div class="ev">
+      <div class="ev-snow" aria-hidden="true"></div>
+      <div class="ev-head">
+        <h2 class="ev-title">🎄 Weihnachts-Event</h2>
+        <div class="ev-sub" id="evSub">Schreibt zusammen 10 000 Nachrichten bis Weihnachten!</div>
+      </div>
+      <div class="ev-tree" id="evTree"></div>
+      <div class="ev-progress">
+        <div class="ev-bar"><div id="evFill"></div></div>
+        <div class="ev-nums"><b id="evPct">0 %</b><span id="evCount">0 / 10 000 Nachrichten</span></div>
+      </div>
+      <div class="ev-stats">
+        <div><b id="evDays">–</b><span id="evDaysLabel">bis Weihnachten</span></div>
+        <div><b id="evPeople">–</b><span>machen mit</span></div>
+        <div><b id="evMine">0</b><span>von dir</span></div>
+      </div>
+      <div class="ev-reward">
+        <span id="evRewardAv"></span>
+        <div><b>Belohnung: Weihnachtsmütze</b><span class="muted">Exklusiver Profilrahmen. Gibt es nur in diesem Event und danach nie wieder.</span></div>
+      </div>
+      <p class="ev-rules muted">Jede Nachricht zählt, im Einzelchat und in Gruppen. Wird das Ziel bis zum 25. Dezember erreicht, bekommt jeder, der mindestens eine Nachricht beigetragen hat, die Weihnachtsmütze.</p>
+    </div>
+  </section>
+
   <!-- UpReels: öffentliche Kurzvideos -->
   <section id="viewReels" class="view hidden">
     <div class="reel-top">
@@ -376,6 +403,10 @@
     <button class="tab" data-tab="viewReels" id="tabReels">
       <span class="tab-ic"><svg><use href="#i-reels"/></svg></span>
       <span class="tab-label">UpReels</span>
+    </button>
+    <button class="tab hidden" data-tab="viewEvent" id="tabEvent">
+      <span class="tab-ic"><svg><use href="#i-tree"/></svg><span id="eventDot" class="tab-dot hidden"></span></span>
+      <span class="tab-label">Event</span>
     </button>
     <button class="tab" data-tab="viewList" id="tabChats">
       <span class="tab-ic"><svg><use href="#i-chats"/></svg><span id="chatsBadge" class="tab-badge hidden"></span></span>

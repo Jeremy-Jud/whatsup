@@ -1474,14 +1474,17 @@ input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
 .ev-tree svg { width: 100%; height: auto; display: block; overflow: visible; }
 .ev-orn { fill: #64748b; opacity: .45; transition: fill .4s, opacity .4s; }
 .ev-orn.on { fill: var(--c); opacity: 1; filter: drop-shadow(0 0 4px var(--c)); }
-.ev-star { fill: #94a3b8; transform-origin: 100px 25px; transition: fill .4s; }
-.ev-tree.done .ev-star { fill: #facc15; filter: drop-shadow(0 0 8px #facc15); }
+/* Stern leuchtet immer; ist das Ziel erreicht, strahlt er noch stärker */
+.ev-star { fill: #facc15; transform-origin: 100px 25px; filter: drop-shadow(0 0 6px #facc15); }
+.ev-tree.done .ev-star { filter: drop-shadow(0 0 10px #fde047) drop-shadow(0 0 18px #facc15); }
 @media (prefers-reduced-motion: no-preference) {
   .ev-orn.on { animation: evTwinkle 2.2s ease-in-out var(--d) infinite; }
+  .ev-star { animation: evStarGlow 2.4s ease-in-out infinite; }
   .ev-tree.done .ev-star { animation: evStar 2s ease-in-out infinite; }
 }
 @keyframes evTwinkle { 50% { opacity: .55; } }
 @keyframes evStar { 50% { transform: scale(1.15); } }
+@keyframes evStarGlow { 50% { opacity: .78; } }
 .ev-progress { position: relative; width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 6px; }
 .ev-bar { height: 16px; border-radius: 999px; background: color-mix(in srgb, var(--fg) 10%, transparent); overflow: hidden; }
 .ev-bar > div { height: 100%; width: 0; border-radius: inherit; transition: width .8s cubic-bezier(.2, .8, .2, 1);

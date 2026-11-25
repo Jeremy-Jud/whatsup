@@ -1409,3 +1409,38 @@ input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
 .pro-pay-val.code-sm { font-size: 15px; }
 .pro-pay-row .link { margin-left: auto; font-size: 12.5px; }
 .pay-fields { display: flex; flex-direction: column; gap: 8px; margin: -2px 0 4px; }
+
+/* ================= Geschenke ================= */
+.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10000; }
+.gift-stage { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 6px 0 2px; }
+.gift-title { font-size: 18px; font-weight: 700; }
+.gift-from { font-size: 14px; font-weight: 600; color: var(--accent); }
+.gift-present { font-size: 96px; line-height: 1.1; background: none; cursor: pointer; filter: drop-shadow(0 10px 18px rgba(0, 0, 0, .3)); transition: transform .2s; }
+.gift-present:hover { transform: scale(1.06) rotate(-3deg); }
+@media (prefers-reduced-motion: no-preference) {
+  .gift-present { animation: giftWobble 1.6s ease-in-out infinite; }
+  .gift-present.opening { animation: giftOpen .7s ease-in forwards; }
+  .gift-item { animation: giftReveal .5s cubic-bezier(.34, 1.56, .64, 1); }
+}
+@keyframes giftWobble { 0%, 60%, 100% { transform: rotate(0); } 70% { transform: rotate(-9deg) scale(1.05); } 80% { transform: rotate(8deg) scale(1.05); } 90% { transform: rotate(-4deg); } }
+@keyframes giftOpen { 30% { transform: scale(1.25) rotate(-8deg); } 60% { transform: scale(1.35) rotate(8deg); } 100% { transform: scale(2.2); opacity: 0; } }
+@keyframes giftReveal { from { transform: scale(.6); opacity: 0; } }
+.gift-item { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; }
+.gift-item h3 { margin: 4px 0 0; }
+.gift-type { font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.gift-preview { display: grid; place-items: center; min-height: 120px; width: 100%; padding: 14px; border-radius: 16px; background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%); }
+.gift-preview .banner { max-width: 260px; }
+.gift-design { width: 180px; height: 110px; pointer-events: none; }
+.gift-pro-star { font-size: 72px; filter: drop-shadow(0 6px 16px rgba(255, 200, 61, .6)); }
+.gift-from-small { font-size: 12.5px; color: var(--muted); }
+.gift-box .modal-actions { width: 100%; justify-content: center; }
+.gift-box .modal-actions .primary { min-width: 60%; padding-top: 11px; padding-bottom: 11px; font-size: 15px; }
+.gift-code { text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; }
+.gift-code::placeholder { text-transform: none; letter-spacing: normal; font-weight: 400; }
+.gift-who { min-height: 16px; font-size: 12.5px; }
+.gift-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 6px; max-height: 40vh; overflow: auto; padding: 2px; }
+.gift-opt { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px 8px; border-radius: 12px; color: var(--fg); background: var(--soft); }
+.gift-opt.on { box-shadow: 0 0 0 2px var(--accent) inset; }
+.gift-opt .banner-pill { max-width: 100%; }
+.gift-opt-ic { font-size: 28px; }
+.gift-opt-name { font-size: 11px; color: var(--muted); }

@@ -124,6 +124,35 @@
 }
 :root[data-design="gold"] .settings h2, :root[data-design="gold"] .title { letter-spacing: .04em; }
 
+/* ======== Nur mit WhatsUp Pro ======== */
+/* ---------------- Polarlicht: Nordlicht über Bergen ---------------- */
+:root[data-design="aurora"], .design-opt[data-design="aurora"] {
+  color-scheme: dark;
+  --bg: #03111a; --fg: #e8fff8; --muted: #8fbcb3; --line: rgba(120, 255, 210, .13); --soft: rgba(255, 255, 255, .07);
+  --accent: #34e0a1; --on-accent: #00281a; --me: linear-gradient(140deg, #34e0a1, #7c5cff);
+  --pattern: radial-gradient(70% 45% at 50% 0%, rgba(40, 120, 140, .35), transparent 70%), linear-gradient(180deg, #071c2c 0%, #03111a 60%, #020a10 100%);
+}
+/* ---------------- Code-Regen: fallende grüne Zeichen ---------------- */
+:root[data-design="coderain"], .design-opt[data-design="coderain"] {
+  color-scheme: dark;
+  --bg: #010803; --fg: #d9ffe0; --muted: #6faa7c; --line: rgba(60, 255, 120, .14); --soft: rgba(80, 255, 140, .06);
+  --accent: #22e05a; --on-accent: #001a07; --me: linear-gradient(140deg, #2bdc5b, #0f9f3c);
+  --font: "Cascadia Code", Consolas, "Segoe UI", monospace;
+  --pattern: radial-gradient(60% 40% at 50% 0%, rgba(30, 160, 70, .16), transparent 70%), linear-gradient(180deg, #021007, #010803);
+}
+/* ---------------- Vulkan: Glut, Funken und Ausbrüche ---------------- */
+:root[data-design="volcano"], .design-opt[data-design="volcano"] {
+  color-scheme: dark;
+  --bg: #140504; --fg: #fff0e8; --muted: #c99a88; --line: rgba(255, 120, 60, .16); --soft: rgba(255, 255, 255, .07);
+  --accent: #ff5a1f; --on-accent: #ffffff; --me: linear-gradient(140deg, #ff7a1f, #e11d48);
+  --pattern: radial-gradient(70% 40% at 50% 100%, rgba(255, 70, 20, .3), transparent 70%), linear-gradient(180deg, #1f0806 0%, #140504 55%, #0b0201 100%);
+}
+/* Kennzeichen auf den Auswahl-Karten */
+.dz-pro {
+  position: absolute; z-index: 2; top: 6px; right: 6px; padding: 1px 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; background: rgba(0, 0, 0, .5); color: #ffd84d;
+}
+
 /* ---------------- Auswahl-Karten ---------------- */
 /* Jede Karte zeigt eine kleine Szene mit zwei Chat-Blasen, so wie das Design im Chat aussieht */
 .design-grid { --sel: var(--accent); display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; margin-top: 6px; }

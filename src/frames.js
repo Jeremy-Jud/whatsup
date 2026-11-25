@@ -184,6 +184,48 @@
           spark(16, 98, 0.55, '#f0abfc') + spark(104, 98, 0.5, '#fde68a');
       })(),
     },
+    // ---------- WhatsUp Pro: animierte Rahmen (SVG-Animation, läuft ohne JavaScript) ----------
+    orbit: {
+      name: 'Umlaufbahn', locked: true, pro: true,
+      svg: `<circle cx="60" cy="60" r="45" fill="none" stroke="#7dd3fc" stroke-width="1.6" opacity=".55"/>
+        <circle cx="60" cy="60" r="51" fill="none" stroke="#c4b5fd" stroke-width="1" stroke-dasharray="2 5" opacity=".7"/>
+        <g><animateTransform attributeName="transform" type="rotate" from="0 60 60" to="360 60 60" dur="5s" repeatCount="indefinite"/>
+          <circle cx="60" cy="15" r="7.5" fill="#7dd3fc" opacity=".3"/><circle cx="60" cy="15" r="3.6" fill="#fff"/></g>
+        <g><animateTransform attributeName="transform" type="rotate" from="200 60 60" to="-160 60 60" dur="8s" repeatCount="indefinite"/>
+          <circle cx="60" cy="9" r="6" fill="#f0abfc" opacity=".3"/><circle cx="60" cy="9" r="2.8" fill="#fde7ff"/></g>`,
+    },
+    blaze: {
+      name: 'Feuerring', locked: true, pro: true,
+      svg: (() => {
+        let s = `<circle cx="60" cy="60" r="43" fill="none" stroke="#ff7a1f" stroke-width="3.5"><animate attributeName="stroke-opacity" values="1;.55;1" dur="1.3s" repeatCount="indefinite"/></circle>`;
+        for (let i = 0; i < 12; i++) {
+          const deg = i * 30 - 90, [x, y] = onRing(deg, 43), sc = 0.55 + (i % 3) * 0.13;
+          s += `<g transform="translate(${x} ${y}) rotate(${deg + 90}) scale(${sc.toFixed(2)})"><g>
+            <animateTransform attributeName="transform" type="scale" values="1 1;1.1 1.35;.95 .85;1 1" dur="${(0.7 + (i % 4) * 0.15).toFixed(2)}s" begin="-${(i * 0.13).toFixed(2)}s" repeatCount="indefinite"/>
+            <path d="M0 2C-7-3-6-11 0-20 6-11 7-3 0 2Z" fill="#ff5a1f"/><path d="M0 1C-3.5-2-3-7 0-12 3-7 3.5-2 0 1Z" fill="#ffd166"/></g></g>`;
+        }
+        return s;
+      })(),
+    },
+    aurora: {
+      name: 'Polarlicht', locked: true, pro: true,
+      svg: `<defs><linearGradient id="wuAurora" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#22d3ee"/><stop offset=".35" stop-color="#4ade80"/><stop offset=".7" stop-color="#a855f7"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs>
+        <g><animateTransform attributeName="transform" type="rotate" from="0 60 60" to="360 60 60" dur="6s" repeatCount="indefinite"/>
+          <circle cx="60" cy="60" r="45" fill="none" stroke="url(#wuAurora)" stroke-width="13" opacity=".28"/>
+          <circle cx="60" cy="60" r="45" fill="none" stroke="url(#wuAurora)" stroke-width="4.5"/></g>
+        <g><animate attributeName="opacity" values="1;.2;1" dur="2.2s" repeatCount="indefinite"/>${spark(15, 26, 0.75, '#d9fbe8')}${spark(104, 96, 0.65, '#f3e8ff')}</g>
+        <g><animate attributeName="opacity" values=".2;1;.2" dur="2.2s" repeatCount="indefinite"/>${spark(106, 22, 0.6, '#cffafe')}${spark(16, 96, 0.55, '#dcfce7')}</g>`,
+    },
+    bolt: {
+      name: 'Blitze', locked: true, pro: true,
+      svg: `<circle cx="60" cy="60" r="44" fill="none" stroke="#facc15" stroke-width="2.5" opacity=".85"/>
+        <circle cx="60" cy="60" r="44" fill="none" stroke="#fff7ae" stroke-width="2" stroke-dasharray="10 18"><animateTransform attributeName="transform" type="rotate" from="0 60 60" to="360 60 60" dur="3s" repeatCount="indefinite"/></circle>
+        <g fill="#facc15" stroke="#a16207" stroke-width="1.2" stroke-linejoin="round">
+          <path d="M18 12 30 12 24 24 32 24 16 42 21 28 13 28Z"><animate attributeName="opacity" values="1;1;.15;1;.15;1" keyTimes="0;.6;.65;.7;.75;1" dur="2.4s" repeatCount="indefinite"/></path>
+          <path d="M98 76 110 76 104 88 112 88 96 106 101 92 93 92Z"><animate attributeName="opacity" values="1;.15;1;1" keyTimes="0;.1;.2;1" dur="3.1s" repeatCount="indefinite"/></path>
+        </g>`,
+    },
   };
 
   // Banner für den Profil-Status (ebenfalls nur mit Code)
@@ -196,6 +238,10 @@
     // Belohnungen für Wochen-Challenges
     champion: { name: 'Champion', challenge: 3, bg: 'linear-gradient(135deg, #b8860b, #ffd700 45%, #ff8c00)' },
     legend: { name: 'Legende', challenge: 10, bg: 'linear-gradient(120deg, #f472b6, #a855f7 50%, #facc15)' },
+    // WhatsUp Pro: animierte Banner (Farben fließen, siehe .anim in style.css)
+    aurora: { name: 'Polarlicht', pro: true, anim: true, bg: 'linear-gradient(120deg, #0f766e, #22d3ee, #4ade80, #a855f7, #0f766e)' },
+    lava: { name: 'Lava', pro: true, anim: true, bg: 'linear-gradient(120deg, #7f1d1d, #ef4444, #f97316, #facc15, #7f1d1d)' },
+    holo: { name: 'Hologramm', pro: true, anim: true, bg: 'linear-gradient(120deg, #6366f1, #ec4899, #22d3ee, #84cc16, #6366f1)' },
   };
 
   window.WHATSUP_FRAMES = FRAMES;

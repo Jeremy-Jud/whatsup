@@ -93,6 +93,8 @@ export default {
       if (!CODE_RE.test(c)) return fail(400, 'bad code');
       return env.ACHSTATS.get(env.ACHSTATS.idFromName('global')).fetch('https://stats/user/' + c);
     }
+    // WhatsUp Pro: bar oder per Überweisung bezahlen, der Admin bestätigt die Zahlung
+    if (parts[1] === 'pro') return proRoute(req, env, parts);
     // UpReels: Videos gehen an den Speicher des jeweiligen Reels, alles andere an den zentralen Index
     if (parts[1] === 'reels') {
       if (parts[2] === 'video' && /^[a-z0-9]{16,40}$/.test(parts[3] || '') && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -342,8 +344,44 @@ export class AchStats {
     this.sql.exec('CREATE TABLE IF NOT EXISTS users (code TEXT PRIMARY KEY, name TEXT, ver TEXT, plat TEXT, first INTEGER, last INTEGER)');
     // Ranglisten: längster Streak, ob man in Ranglisten erscheinen will (lb = 1)
     for (const col of ['maxfire INTEGER DEFAULT 0', 'lb INTEGER DEFAULT 1']) { try { this.sql.exec(`ALTER TABLE users ADD COLUMN ${col}`); } catch { /* gibt es schon */ } }
+    // WhatsUp Pro: Kaufanfragen (status: pending | paid | rejected | revoked) und Einstellungen (Zahlungsarten)
+    this.sql.exec('CREATE TABLE IF NOT EXISTS purchases (code TEXT PRIMARY KEY, name TEXT, status TEXT, requested INTEGER, decided INTEGER)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)');
     this.cache = null; // { at, body }
     this.lbCache = {};
+  }
+  kvGet(k) { const r = this.sql.exec('SELECT v FROM kv WHERE k = ?', k).toArray(); return r.length ? r[0].v : null; }
+  // Zahlungsarten des Admins: { cash, cashNote, iban, name } oder null
+  payInfo() { try { return JSON.parse(this.kvGet('propay')) || null; } catch { return null; } }
+
+  async pro(path, req) {
+    const b = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
+    const now = Date.now();
+    const row = (c) => this.sql.exec('SELECT code, name, status, requested, decided FROM purchases WHERE code = ?', c).toArray()[0] || null;
+    if (path === '/pro/list') {
+      const paid = new Set(this.sql.exec("SELECT code FROM purchases WHERE status = 'paid'").toArray().map((r) => r.code));
+      return json({ pro: (b.codes || []).filter((c) => paid.has(c)) });
+    }
+    if (!CODE_RE.test(b.code || b.target || '')) return fail(400, 'bad code');
+    // Eigener Status, dazu Preis und wie man bezahlt (nur für angemeldete WhatsUp-Nutzer)
+    if (path === '/pro/status') { const r = row(b.code); return json({ status: r ? r.status : 'none', price: PRO_PRICE, pay: this.payInfo(), card: !!b.card }); }
+    if (path === '/pro/request') {
+      const r = row(b.code);
+      if (r && r.status === 'paid') return json({ status: 'paid' });
+      if (!r && this.sql.exec("SELECT COUNT(*) AS n FROM purchases WHERE status = 'pending'").toArray()[0].n >= 500) return fail(429, 'too many requests');
+      const name = b.name || (this.sql.exec('SELECT name FROM users WHERE code = ?', b.code).toArray()[0] || {}).name || '';
+      this.sql.exec(`INSERT INTO purchases (code, name, status, requested, decided) VALUES (?, ?, 'pending', ?, 0)
+        ON CONFLICT(code) DO UPDATE SET name = excluded.name, status = 'pending', requested = excluded.requested, decided = 0`, b.code, name, now);
+      return json({ status: 'pending' });
+    }
+    if (path === '/pro/decide') {
+      const status = { confirm: 'paid', reject: 'rejected', revoke: 'revoked' }[b.action];
+      const name = (row(b.target) || {}).name || (this.sql.exec('SELECT name FROM users WHERE code = ?', b.target).toArray()[0] || {}).name || '';
+      this.sql.exec(`INSERT INTO purchases (code, name, status, requested, decided) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(code) DO UPDATE SET status = excluded.status, decided = excluded.decided`, b.target, name, status, now, now);
+      return json({ ok: true, status });
+    }
+    return fail(404, 'not found');
   }
   // Rangliste: die besten 50, dazu der eigene Platz und (optional) die Freunde
   async leaderboard(url) {
@@ -398,6 +436,17 @@ export class AchStats {
       return json({ ok: true });
     }
     if (path === '/leaderboard') return this.leaderboard(new URL(req.url));
+    if (path === '/pro/purchases') { // nur intern, Admin-Prüfung im Worker
+      const list = this.sql.exec(`SELECT p.code, COALESCE(NULLIF(u.name, ''), p.name) AS name, p.status, p.requested, p.decided
+        FROM purchases p LEFT JOIN users u ON u.code = p.code ORDER BY p.requested DESC LIMIT 3000`).toArray();
+      return json({ purchases: list, pending: list.filter((p) => p.status === 'pending').length, price: PRO_PRICE, pay: this.payInfo() });
+    }
+    if (path === '/pro/pay') { // nur intern, Admin-Prüfung und Prüfung der Angaben im Worker
+      const { pay } = await req.json();
+      this.sql.exec('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', 'propay', JSON.stringify(pay));
+      return json({ ok: true });
+    }
+    if (path.startsWith('/pro/')) return this.pro(path, req);
     if (path === '/seen') { // nur intern vom Briefkasten (Signatur dort geprüft)
       const b = await req.json();
       const { code, name, ver, plat } = b;
@@ -491,6 +540,114 @@ async function codeSigned(env, code, text, sig) {
   return !!r.ok;
 }
 const admins = (env) => clean(env.ADMIN_CODES).toUpperCase().split(/[\s,]+/).filter((c) => CODE_RE.test(c));
+
+// ---------- WhatsUp Pro ----------
+// Käufer zahlen bar oder per Überweisung (ihr Code in der Mitteilung) und melden „bezahlt“ (signiert).
+// Der Admin vergleicht mit seinen Zahlungen und bestätigt oder lehnt ab. Pro ist, wer bestätigt wurde.
+const PRO_PRICE = 2;                 // CHF, einmalig
+// IBAN prüfen: Format und Prüfziffer (mod 97)
+function validIban(v) {
+  const iban = String(v || '').toUpperCase().replace(/\s+/g, '');
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return null;
+  const digits = (iban.slice(4) + iban.slice(0, 4)).replace(/[A-Z]/g, (ch) => String(ch.charCodeAt(0) - 55));
+  let r = 0;
+  for (const d of digits) r = (r * 10 + Number(d)) % 97;
+  return r === 1 ? iban : null;
+}
+// Zahlungsarten vom Admin bereinigen: { cash, cashNote, iban, name } (null = ungültig)
+function cleanPay(p) {
+  if (!p || typeof p !== 'object') return null;
+  const iban = p.iban ? validIban(p.iban) : '';
+  const name = textOf(p.name, 60);
+  if (iban === null || (iban && !name)) return null;
+  return { cash: !!p.cash, cashNote: textOf(p.cashNote, 120), iban, name: iban ? name : '' };
+}
+// ---------- Kartenzahlung über Stripe (optional) ----------
+// Aktiv mit den Secrets STRIPE_SECRET_KEY und STRIPE_WEBHOOK_SECRET (wrangler secret put …).
+// Die App holt sich eine Bezahlseite (Checkout), Stripe meldet die Zahlung per Webhook, Pro wird sofort freigeschaltet.
+const PRO_RETURN_URL = 'https://jeremy-jud.github.io/whatsup/about/';
+async function stripeCheckout(env, code) {
+  const form = new URLSearchParams({
+    mode: 'payment', client_reference_id: code, 'metadata[code]': code,
+    'line_items[0][quantity]': '1', 'line_items[0][price_data][currency]': 'chf',
+    'line_items[0][price_data][unit_amount]': String(PRO_PRICE * 100),
+    'line_items[0][price_data][product_data][name]': 'WhatsUp Pro',
+    'line_items[0][price_data][product_data][description]': `Einmalig, für den Code ${code}`,
+    success_url: PRO_RETURN_URL + '?pro=ok', cancel_url: PRO_RETURN_URL + '?pro=abgebrochen',
+  });
+  const r = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+    method: 'POST', body: form,
+    headers: { Authorization: `Bearer ${clean(env.STRIPE_SECRET_KEY)}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  const d = await r.json().catch(() => ({}));
+  return r.ok && typeof d.url === 'string' ? d.url : null;
+}
+// Stripe-Signatur prüfen: Header „t=…,v1=…“, HMAC-SHA256 über „t.Rohdaten“, höchstens 5 Minuten alt
+async function stripeSigned(env, raw, header) {
+  const parts = Object.fromEntries(String(header || '').split(',').map((p) => p.split('=')).filter((p) => p.length === 2 && p[0] === 't'));
+  const sigs = String(header || '').split(',').filter((p) => p.startsWith('v1=')).map((p) => p.slice(3));
+  const t = Number(parts.t);
+  if (!t || !sigs.length || Math.abs(Date.now() / 1000 - t) > 300) return false;
+  const key = await crypto.subtle.importKey('raw', enc.encode(clean(env.STRIPE_WEBHOOK_SECRET)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = hex(await crypto.subtle.sign('HMAC', key, enc.encode(`${t}.${raw}`)));
+  return sigs.some((s) => s.length === mac.length && [...s].reduce((x, ch, i) => x | (ch.charCodeAt(0) ^ mac.charCodeAt(i)), 0) === 0);
+}
+
+async function proRoute(req, env, parts) {
+  if (req.method !== 'POST') return fail(405, 'method not allowed');
+  const stats = env.ACHSTATS.get(env.ACHSTATS.idFromName('global'));
+  const internal = (path, body) => stats.fetch('https://stats' + path, { method: 'POST', body: JSON.stringify(body || {}) });
+  const what = parts[2];
+  const card = !!(clean(env.STRIPE_SECRET_KEY) && clean(env.STRIPE_WEBHOOK_SECRET));
+  // Webhook von Stripe: bezahlte Checkout-Sitzung -> Pro für den Code freischalten
+  if (what === 'stripe') {
+    if (!card) return fail(404, 'not found');
+    const raw = await req.text();
+    if (!(await stripeSigned(env, raw, req.headers.get('Stripe-Signature')))) return fail(400, 'bad signature');
+    let ev = null;
+    try { ev = JSON.parse(raw); } catch { return fail(400, 'bad request'); }
+    const s = ev && ev.data && ev.data.object;
+    if (['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(ev.type) && s && s.payment_status === 'paid') {
+      const c = String(s.client_reference_id || (s.metadata && s.metadata.code) || '').toUpperCase();
+      if (CODE_RE.test(c)) await internal('/pro/decide', { target: c, action: 'confirm' });
+    }
+    return json({ received: true });
+  }
+  const b = await req.json().catch(() => ({}));
+  // Wer von diesen Codes ist Pro? (öffentlich, für das ⭐ neben dem Namen)
+  if (what === 'list') {
+    const codes = (Array.isArray(b.codes) ? b.codes : []).map((c) => String(c).toUpperCase()).filter((c) => CODE_RE.test(c)).slice(0, 500);
+    return internal('/pro/list', { codes });
+  }
+  const code = String(b.code || '').toUpperCase();
+  if (!freshTs(Number(b.ts))) return fail(403, 'forbidden');
+  // Eigener Status samt Zahlungsarten und „Ich habe bezahlt“ (signiert vom Besitzer des Codes)
+  if (what === 'status' || what === 'request' || what === 'checkout') {
+    if (!(await codeSigned(env, code, `pro${what}|${code}|${b.ts}`, b.sig))) return fail(403, 'forbidden');
+    if (what === 'checkout') {
+      if (!card) return fail(404, 'card payment not configured');
+      const url = await stripeCheckout(env, code);
+      return url ? json({ url }) : fail(502, 'stripe error');
+    }
+    return what === 'status' ? internal('/pro/status', { code, card }) : internal('/pro/request', { code, name: textOf(b.name, 24) });
+  }
+  // Admin: Einkäufe ansehen, bestätigen/ablehnen/entziehen, Zahlungsarten setzen
+  if (!admins(env).includes(code)) return fail(403, 'forbidden');
+  const target = String(b.target || '').toUpperCase(), action = String(b.action || '');
+  const pay = typeof b.pay === 'string' ? b.pay.slice(0, 2000) : '';
+  const text = { purchases: `adminpurchases|${code}|${b.ts}`, decide: `admindecide|${code}|${b.ts}|${target}|${action}`, pay: `adminpay|${code}|${b.ts}|${pay}` }[what];
+  if (!text) return fail(404, 'not found');
+  if (!(await codeSigned(env, code, text, b.sig))) return fail(403, 'forbidden');
+  if (what === 'purchases') return internal('/pro/purchases');
+  if (what === 'decide') {
+    if (!CODE_RE.test(target) || !['confirm', 'reject', 'revoke'].includes(action)) return fail(400, 'bad request');
+    return internal('/pro/decide', { target, action });
+  }
+  let p = null;
+  try { p = cleanPay(JSON.parse(pay)); } catch { /* ungültig */ }
+  if (!p) return fail(400, 'bad payment info');
+  return internal('/pro/pay', { pay: p });
+}
 
 // Zentraler Index: Feed, Likes, Kommentare, Aufrufe, Meldungen
 export class Reels {

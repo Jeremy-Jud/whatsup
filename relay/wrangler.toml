@@ -38,3 +38,5 @@ VAPID_SUBJECT = "https://github.com/Jeremy-Jud/whatsup"
 ADMIN_CODES = "V5KGWG,QM3UNP"
 # Geheime Werte (nicht hier!): VAPID_PUBLIC, VAPID_PRIVATE  ->  wrangler secret put …
 # Optional für Anrufe durch strenge Netzwerke (Cloudflare Realtime TURN, kostet ca. 0,05 $/GB weitergeleitet): TURN_KEY_ID, TURN_KEY_TOKEN
+# Optional für WhatsUp Pro per Karte (Stripe): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+#   Webhook in Stripe: https://whatsup-relay.whatsup-relay.workers.dev/v1/pro/stripe (Ereignis checkout.session.completed)

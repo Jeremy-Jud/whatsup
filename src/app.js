@@ -1748,8 +1748,21 @@
       if (view === 'viewSettings') renderProfAvatar(); // Rahmen und Banner sofort (ent)sperren
       if (drawOpen) drawOpen();
     }
+    // Admins haben alle Erfolge (werden einmal freigeschaltet und an den Server gemeldet)
+    function grantAllAch() {
+      const missing = ACH.filter((x) => !unlocked[x.id]);
+      if (!missing.length) return;
+      const now = Date.now();
+      missing.forEach((x) => { unlocked[x.id] = now; });
+      saveMeta();
+      toast(`🏆 Als Admin hast du jetzt alle ${ACH.length} Erfolge`, true);
+      relay.reportAchievements();
+      broadcastProfile(); // Freunde sehen die Erfolge im Profil
+      scheduleRender();
+    }
     function setAdmin(a) {
       a = !!a;
+      if (a) grantAllAch();
       if (a === admin) return;
       const was = isPro();
       admin = a;

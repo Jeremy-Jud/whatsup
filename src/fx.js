@@ -433,6 +433,131 @@
         c.globalCompositeOperation = 'source-over';
       },
     },
+
+    // ======== Nur mit WhatsUp Pro ========
+    // ---------- Polarlicht: wehende Lichtvorhänge über einer Bergkette ----------
+    aurora: {
+      init() {
+        // senkrechter Farbstreifen, wird für jeden Vorhang-Abschnitt gestreckt (schneller als Verläufe)
+        const strip = document.createElement('canvas');
+        strip.width = 1; strip.height = 256;
+        const g = strip.getContext('2d'), gr = g.createLinearGradient(0, 0, 0, 256);
+        gr.addColorStop(0, 'rgba(168,85,247,0)'); gr.addColorStop(0.3, 'rgba(168,85,247,.5)');
+        gr.addColorStop(0.62, 'rgba(74,222,128,.9)'); gr.addColorStop(1, 'rgba(34,211,238,0)');
+        g.fillStyle = gr; g.fillRect(0, 0, 1, 256);
+        return {
+          strip,
+          bands: [0, 1, 2].map((i) => ({ y: H * (0.12 + i * 0.1), len: H * rnd(0.22, 0.34), amp: rnd(18, 40), f1: rnd(0.004, 0.009), f2: rnd(0.011, 0.02), sp: rnd(0.25, 0.5) * (i % 2 ? -1 : 1), a: rnd(0.35, 0.6), ph: rnd(0, TAU) })),
+          stars: Array.from({ length: Math.round((W * H) / 2600) }, () => ({ x: rnd(0, W), y: rnd(0, H * 0.8), r: rnd(0.5, 1.4), a: rnd(0.3, 0.9), ph: rnd(0, TAU), tw: rnd(0.8, 2.2) })),
+          hills: Array.from({ length: 11 }, () => rnd(0.8, 0.9)),
+        };
+      },
+      frame(c, s, dt, t) {
+        c.fillStyle = '#fff';
+        for (const p of s.stars) { c.globalAlpha = p.a * (0.55 + 0.45 * Math.sin(t * p.tw + p.ph)); c.fillRect(p.x, p.y, p.r, p.r); }
+        c.globalCompositeOperation = 'lighter';
+        const step = 4;
+        for (const b of s.bands) {
+          for (let x = -step; x < W + step; x += step) {
+            const y = b.y + Math.sin(x * b.f1 + t * b.sp + b.ph) * b.amp + Math.sin(x * b.f2 - t * b.sp * 1.7) * b.amp * 0.4;
+            const flick = 0.55 + 0.45 * Math.sin(x * 0.03 + t * 1.3 + b.ph) * Math.sin(x * 0.011 - t * 0.6);
+            c.globalAlpha = b.a * Math.max(0.08, flick);
+            c.drawImage(s.strip, x, y, step + 1, b.len * (0.75 + 0.25 * flick));
+          }
+        }
+        c.globalCompositeOperation = 'source-over';
+        // Bergkette
+        c.globalAlpha = 1; c.fillStyle = '#020a10';
+        c.beginPath(); c.moveTo(0, H);
+        s.hills.forEach((h, i) => c.lineTo((i / (s.hills.length - 1)) * W, H * h));
+        c.lineTo(W, H); c.closePath(); c.fill();
+      },
+    },
+
+    // ---------- Code-Regen: Zeichen fallen in Spalten, die Spitze leuchtet ----------
+    coderain: {
+      opacity: 0.85,
+      init() {
+        const fs = 16;
+        return { fs, chars: 'アイウエオカキクケコサシスセソタチツテトナニヌネノ0123456789ABCDEF<>{}=+*'.split(''), cols: Array.from({ length: Math.ceil(W / fs) }, (_, i) => this.col(i, fs, true)) };
+      },
+      col(i, fs, any) {
+        const y = any ? rnd(-H * 0.5, H) : rnd(-H * 0.4, 0);
+        return { x: i * fs + fs / 2, y, sp: rnd(70, 170), len: rnd(8, 24) | 0, g: [], row: Math.floor(y / fs) - (any ? 20 : 1), on: Math.random() < 0.75 };
+      },
+      frame(c, s, dt) {
+        const fs = s.fs;
+        c.font = `${fs}px "Cascadia Mono", Consolas, monospace`; c.textAlign = 'center'; c.textBaseline = 'middle';
+        for (let i = 0; i < s.cols.length; i++) {
+          const k = s.cols[i];
+          if (!k.on) { if (Math.random() < dt * 0.2) k.on = true; continue; }
+          k.y += k.sp * dt;
+          const row = Math.floor(k.y / fs);
+          while (k.row < row) { k.row++; k.g.unshift(pick(s.chars)); if (k.g.length > k.len) k.g.pop(); }
+          if ((row - k.len) * fs > H) { s.cols[i] = this.col(i, fs, false); continue; }
+          for (let j = 0; j < k.g.length; j++) {
+            const y = (row - j) * fs + fs / 2;
+            if (y < -fs || y > H + fs) continue;
+            if (j > 0 && Math.random() < dt * 0.6) k.g[j] = pick(s.chars); // Zeichen flackern
+            c.globalAlpha = j === 0 ? 1 : 0.85 * (1 - j / k.len);
+            c.fillStyle = j === 0 ? '#eaffea' : '#2bdc5b';
+            c.fillText(k.g[j], k.x, y);
+          }
+        }
+      },
+    },
+
+    // ---------- Vulkan: glühender Krater, aufsteigende Funken, ab und zu ein Ausbruch ----------
+    volcano: {
+      init() {
+        return {
+          embers: Array.from({ length: Math.round((W * H) / 5000) }, () => this.ember(true)),
+          bursts: [], next: rnd(2, 5),
+          ash: Array.from({ length: Math.round(W / 12) }, () => ({ x: rnd(0, W), y: rnd(0, H), sp: rnd(8, 20), dr: rnd(-6, 6), r: rnd(0.6, 1.6) })),
+        };
+      },
+      ember(any) { return { x: rnd(0, W), y: any ? rnd(0, H) : H + rnd(0, 40), vx: rnd(-8, 8), vy: -rnd(25, 70), r: rnd(0.8, 2.4), life: rnd(4, 9), age: any ? rnd(0, 4) : 0, hue: pick(['255,120,40', '255,170,60', '255,80,30']) }; },
+      frame(c, s, dt, t) {
+        const cx = W * 0.5, top = H * 0.8;
+        const pulse = 0.75 + 0.25 * Math.sin(t * 1.4);
+        drawGlow(c, glow('rgba(255,90,30,1)', 64), cx, top, Math.min(W, 600) * 0.6, 0.35 * pulse);
+        // Berg mit Lava-Rinnen
+        c.globalAlpha = 1; c.fillStyle = '#120403';
+        c.beginPath(); c.moveTo(cx - W * 0.75, H); c.lineTo(cx - W * 0.09, top); c.lineTo(cx + W * 0.09, top); c.lineTo(cx + W * 0.75, H); c.closePath(); c.fill();
+        c.strokeStyle = `rgba(255,110,40,${(0.45 * pulse).toFixed(3)})`; c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(cx - W * 0.03, top); c.quadraticCurveTo(cx - W * 0.06, top + (H - top) * 0.5, cx - W * 0.16, H);
+        c.moveTo(cx + W * 0.04, top); c.quadraticCurveTo(cx + W * 0.03, top + (H - top) * 0.6, cx + W * 0.11, H);
+        c.stroke();
+        // Ausbruch
+        s.next -= dt;
+        if (s.next <= 0) {
+          for (let i = 0; i < 40; i++) {
+            const a = rnd(-Math.PI * 0.85, -Math.PI * 0.15), v = rnd(120, 320);
+            s.bursts.push({ x: cx + rnd(-W * 0.05, W * 0.05), y: top, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: rnd(1.2, 2.4), age: 0, r: rnd(1.2, 3) });
+          }
+          s.next = rnd(5, 11);
+        }
+        c.globalCompositeOperation = 'lighter';
+        s.bursts = s.bursts.filter((p) => {
+          p.age += dt;
+          if (p.age > p.life) return false;
+          p.vy += 180 * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+          drawGlow(c, glow('rgba(255,150,50,1)', 16), p.x, p.y, p.r * 4, 1 - p.age / p.life);
+          return p.y < H + 10;
+        });
+        for (let i = 0; i < s.embers.length; i++) {
+          const e = s.embers[i];
+          e.age += dt; e.x += (e.vx + Math.sin(t + i) * 10) * dt; e.y += e.vy * dt;
+          if (e.age > e.life || e.y < -10) { s.embers[i] = this.ember(false); continue; }
+          drawGlow(c, glow(`rgba(${e.hue},1)`, 16), e.x, e.y, e.r * 4, Math.min(1, e.age) * (1 - e.age / e.life) * 0.9);
+        }
+        c.globalCompositeOperation = 'source-over';
+        // Asche
+        c.fillStyle = '#6b5b55'; c.globalAlpha = 0.35;
+        for (const p of s.ash) { p.y += p.sp * dt; p.x += p.dr * dt; if (p.y > H) { p.y = -4; p.x = rnd(0, W); } c.fillRect(p.x, p.y, p.r, p.r); }
+      },
+    },
   };
 
   // ======================= Steuerung =======================

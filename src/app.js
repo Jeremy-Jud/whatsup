@@ -450,6 +450,7 @@
       type: 'hello', v: PROTO, pv: me.pv || 0, name: me.name, status: me.status || '', avatar: me.avatar || null, frame: me.frame || null, banner: validBanner(me.banner),
       badges: Object.keys(unlocked).length, ach: Object.keys(unlocked), ctx: isFriend(code) ? 'friend' : 'group',
       keys: relay.publicKeys(),
+      pro: pro.isPro() || undefined, // nur ein Hinweis; ob es stimmt, fragt der Empfänger beim Server nach
     };
   }
 
@@ -482,6 +483,7 @@
         relay.pinKeys(code, data.keys);
         relay.saveNames();
         c.badges = Math.max(0, Math.min(999, Number(data.badges) || 0));
+        if (!!data.pro !== pro.has(code)) pro.refreshOthersSoon(); // ⭐ beim Server nachprüfen
         // Welche Erfolge (ältere Versionen schicken nur die Anzahl)
         if (Array.isArray(data.ach)) c.ach = [...new Set(data.ach.map(String))].filter((id) => ACH.some((a) => a.id === id));
         const oldV = c.v || 1;
@@ -513,6 +515,9 @@
       }
       case 'mact': // Reaktion oder „für alle löschen“
         receiveAction(code, data);
+        break;
+      case 'firesave': // Streak-Retter des Freundes (WhatsUp Pro)
+        fire.remoteRescue(code, data.day);
         break;
       case 'mack': { // Bestätigung für eine Aktion
         const a = actOutbox.find((x) => x.aid === data.aid);
@@ -1707,6 +1712,232 @@
   const BANNERS = window.WHATSUP_BANNERS;
   const validBanner = (b) => (typeof b === 'string' && Object.prototype.hasOwnProperty.call(BANNERS, b) ? b : null);
 
+  // ================= WhatsUp Pro =================
+  // Einmalig bar oder per Überweisung: Der Käufer meldet „Ich habe bezahlt“, der Admin bestätigt unter Du → Admin → Einkäufe.
+  // Ob jemand Pro ist, entscheidet der Server (die App merkt es sich, damit es auch offline gilt).
+  // Pro bekommt nur Extras dazu, ohne Pro geht nichts verloren.
+  const pro = (() => {
+    let mine = store.load('pro', { status: 'none' });   // none | pending | paid | rejected | revoked
+    let others = store.load('proOthers', {});           // Code -> 1: Freunde mit Pro (für das ⭐)
+    let price = 2;
+    const isPro = () => mine.status === 'paid';
+    const has = (code) => (me && code === me.code ? isPro() : !!others[code]);
+    const PERKS = [
+      ['⭐', 'Pro-Abzeichen', 'Ein Stern neben deinem Namen, den alle sehen'],
+      ['🎨', 'Exklusive Designs', 'Polarlicht, Code-Regen und Vulkan'],
+      ['🖼️', 'Alle Rahmen & Banner', 'Dazu animierte Pro-Rahmen und -Banner'],
+      ['🎮', 'Neue Mini-Spiele', '4 gewinnt und Galgenmännchen'],
+      ['🛟', 'Streak-Retter', 'Einmal im Monat einen verpassten Tag retten'],
+    ];
+    let drawOpen = null;
+
+    function setMine(status) {
+      if (!status || status === mine.status) return;
+      const was = isPro();
+      mine = { status, at: Date.now() };
+      store.save('pro', mine);
+      if (!was && isPro()) { toast('⭐ Du bist jetzt WhatsUp Pro! Danke für deine Unterstützung.', true); broadcastProfile(); }
+      if (was && !isPro()) lost();
+      if (status === 'rejected') toast('Deine Pro-Zahlung wurde nicht gefunden. Schreib dem Admin, falls du bezahlt hast.');
+      renderRow(); scheduleRender();
+      if (view === 'viewSettings') renderProfAvatar(); // Rahmen und Banner sofort (ent)sperren
+      if (drawOpen) drawOpen();
+    }
+    // Pro entzogen: Pro-Design, -Rahmen und -Banner zurücksetzen
+    function lost() {
+      if (isProDesign(settings.design)) { settings.design = 'classic'; saveSettings(); applyTheme(); renderTheme(); }
+      let changed = false;
+      if (me.frame && frameLocked(me.frame)) { me.frame = null; changed = true; }
+      if (me.banner && bannerLocked(me.banner)) { me.banner = null; changed = true; }
+      if (changed) { me.pv = Date.now(); saveMeta(); }
+      broadcastProfile();
+    }
+    // Status vom Server, dazu Preis und Zahlungsarten (bar / Überweisung) für die Pro-Seite
+    let busy = false, loaded = false, payInfo = null, cardOn = false;
+    async function refresh() {
+      if (busy || !relay.ready()) return;
+      busy = true;
+      try {
+        const d = await relay.pro.status();
+        if (d.price) price = d.price;
+        payInfo = d.pay || null;
+        cardOn = !!d.card;
+        loaded = true;
+        setMine(d.status);
+        renderRow();
+        if (drawOpen) drawOpen();
+      } catch {} finally { busy = false; }
+    }
+    // Wer von meinen Freunden ist Pro?
+    let othersT = 0;
+    async function refreshOthers() {
+      const codes = wantedCodes();
+      if (!codes.length || !relay.enabled()) return;
+      try {
+        const next = {};
+        (await relay.pro.list(codes)).forEach((c) => { next[c] = 1; });
+        if (JSON.stringify(next) !== JSON.stringify(others)) { others = next; store.save('proOthers', others); scheduleRender(); }
+      } catch {}
+    }
+    const refreshOthersSoon = () => { clearTimeout(othersT); othersT = setTimeout(refreshOthers, 2000); };
+
+    // ⭐ hinter dem Namen
+    function star(code) {
+      if (!has(code)) return null;
+      const s = el('span', 'pro-star', '⭐');
+      s.title = 'WhatsUp Pro';
+      return s;
+    }
+    function renderRow() {
+      const sub = $('proSub');
+      if (!sub) return;
+      sub.textContent = isPro() ? '✓ Aktiv · danke für deine Unterstützung!'
+        : mine.status === 'pending' ? '⏳ Deine Zahlung wird geprüft'
+        : SOON ? 'Demnächst: exklusive Designs, Rahmen, Spiele und mehr'
+        : `Für ${price} CHF: exklusive Designs, Rahmen, Spiele und mehr`;
+      $('proCard').classList.toggle('active', isPro());
+    }
+
+    // Nach dem Öffnen der Stripe-Seite: 10 Minuten lang alle 5 Sekunden nachschauen
+    let cardT = 0;
+    function waitCard() {
+      clearInterval(cardT);
+      const until = Date.now() + 10 * 60000;
+      cardT = setInterval(() => { if (isPro() || Date.now() > until) { clearInterval(cardT); return; } refresh(); }, 5000);
+    }
+    // Vorschau „Demnächst“: Kaufen ist noch aus, man sieht nur, was kommt (zum Freischalten SOON = false setzen)
+    const SOON = true;
+    function teaser(first) {
+      openModal((box) => {
+        box.classList.add('pro-box');
+        const head = el('div', 'pro-head');
+        head.append(el('div', 'pro-head-star', '⭐'), el('h3', '', first ? 'Bald gibt es WhatsUp Pro!' : 'WhatsUp Pro'),
+          el('div', 'muted', 'Bald kannst du WhatsUp unterstützen und bekommst dafür Extras. Diese sind geplant:'));
+        box.appendChild(head);
+        const ul = el('ul', 'pro-perks');
+        PERKS.forEach(([ic, t, d]) => {
+          const li = el('li'), tx = el('div');
+          tx.append(el('b', '', t), el('span', 'muted', d));
+          li.append(el('span', 'pro-perk-ic', ic), tx);
+          ul.appendChild(li);
+        });
+        box.appendChild(ul);
+        const body = el('div', 'pro-body');
+        body.append(el('div', 'pro-state', '🚀 Demnächst verfügbar. Alles, was du heute hast, bleibt kostenlos.'), buttons([first ? 'Cool!' : 'Schließen', 'primary', closeModal]));
+        box.appendChild(body);
+      });
+    }
+    // Einmal nach dem Update: Hinweis, dass Pro bald kommt
+    function announce() {
+      if (!SOON || isPro() || store.load('proTeaserShown', false)) return;
+      if (!$('modal').classList.contains('hidden')) { setTimeout(announce, 5000); return; }
+      store.save('proTeaserShown', true);
+      teaser(true);
+    }
+    function open() {
+      if (SOON && !isPro()) { teaser(false); return; }
+      openModal((box) => {
+        box.classList.add('pro-box');
+        const head = el('div', 'pro-head');
+        head.append(el('div', 'pro-head-star', '⭐'), el('h3', '', 'WhatsUp Pro'),
+          el('div', 'muted', isPro() ? 'Danke, dass du WhatsUp unterstützt!' : `Einmalig ${price} CHF. Du unterstützt WhatsUp und bekommst Extras.`));
+        box.appendChild(head);
+        const ul = el('ul', 'pro-perks');
+        PERKS.forEach(([ic, t, d]) => {
+          const li = el('li'), tx = el('div');
+          tx.append(el('b', '', t), el('span', 'muted', d));
+          li.append(el('span', 'pro-perk-ic', ic), tx);
+          ul.appendChild(li);
+        });
+        box.appendChild(ul);
+        const body = el('div', 'pro-body');
+        box.appendChild(body);
+        const draw = () => {
+          if (!box.isConnected || !box.classList.contains('pro-box')) { drawOpen = null; return; }
+          body.replaceChildren();
+          if (isPro()) {
+            body.appendChild(el('div', 'pro-state ok', '✓ Pro ist aktiv. Alles ist freigeschaltet.'));
+            body.appendChild(buttons(['Schließen', 'primary', closeModal]));
+            return;
+          }
+          if (mine.status === 'pending') {
+            body.appendChild(el('div', 'pro-state', '⏳ Danke! Der Admin prüft deine Zahlung und schaltet Pro dann frei. Das kann etwas dauern.'));
+            body.appendChild(buttons(['Neu prüfen', 'ghost', () => { refresh(); toast('Wird geprüft …'); }], ['Schließen', 'primary', closeModal]));
+            return;
+          }
+          if (!relay.ready()) {
+            body.appendChild(el('div', 'pro-state', 'Für WhatsUp Pro muss unter Offline-Zustellung „Über den Server zustellen“ eingeschaltet sein.'));
+            body.appendChild(buttons(['Schließen', 'primary', closeModal]));
+            return;
+          }
+          if (!loaded) { body.appendChild(el('div', 'muted center', 'Wird geladen …')); return; }
+          const pay = payInfo || {};
+          if (!pay.cash && !pay.iban && !cardOn) {
+            body.appendChild(el('div', 'pro-state', 'Der Admin hat noch keine Zahlungsart eingetragen. Schau später wieder vorbei.'));
+            body.appendChild(buttons(['Schließen', 'primary', closeModal]));
+            return;
+          }
+          if (mine.status === 'rejected') body.appendChild(el('div', 'pro-state err', 'Deine letzte Zahlung wurde nicht gefunden. Hast du deinen Code genannt bzw. in die Mitteilung geschrieben?'));
+          // Zeile „Bezeichnung: Wert [Kopieren]“
+          const line = (label, value, copy, cls = '') => {
+            const r = el('div', 'pro-pay-row');
+            r.append(el('span', 'muted', label), el('span', 'pro-pay-val' + (cls ? ' ' + cls : ''), value));
+            if (copy) {
+              const b = el('button', 'link', 'Kopieren');
+              b.type = 'button';
+              b.onclick = async () => { try { await navigator.clipboard.writeText(copy); toast(`${label} kopiert`); } catch { toast(copy); } };
+              r.appendChild(b);
+            }
+            return r;
+          };
+          body.appendChild(el('div', 'pro-pay-intro', `So bezahlst du ${price} CHF:`));
+          // Karte (Stripe): Bezahlseite im Browser, Pro wird nach der Zahlung automatisch freigeschaltet
+          if (cardOn) {
+            const c = el('div', 'pro-pay');
+            const go = el('button', 'primary', '💳 Mit Karte bezahlen');
+            go.type = 'button';
+            go.onclick = async () => {
+              go.disabled = true;
+              try { const d = await relay.pro.checkout(); window.open(d.url, '_blank'); waitCard(); toast('Bezahlseite geöffnet. Pro wird nach der Zahlung automatisch freigeschaltet.'); }
+              catch { toast('Die Bezahlseite konnte nicht geöffnet werden.'); }
+              go.disabled = false;
+            };
+            c.append(el('div', 'pro-pay-title', '💳 Karte'), el('div', 'muted', 'Sicher über Stripe. Pro ist sofort nach der Zahlung freigeschaltet.'), go);
+            body.appendChild(c);
+          }
+          if (pay.cash || pay.iban) body.appendChild(el('div', 'muted', 'Oder bar bzw. per Überweisung:'));
+          if (pay.cash) {
+            const c = el('div', 'pro-pay');
+            c.append(el('div', 'pro-pay-title', '💵 Bar'), el('div', '', pay.cashNote || `Gib dem Admin ${price} CHF bar.`), line('Sag dabei deinen Code', me.code, null, 'code-sm'));
+            body.appendChild(c);
+          }
+          if (pay.iban) {
+            const c = el('div', 'pro-pay');
+            c.append(el('div', 'pro-pay-title', '🏦 Überweisung'), line('Empfänger', pay.name), line('IBAN', pay.iban.replace(/(.{4})/g, '$1 ').trim(), pay.iban),
+              line('Betrag', `${Number(price).toFixed(2)} CHF`), line('Mitteilung', me.code, me.code, 'code-sm'));
+            body.appendChild(c);
+          }
+          const err = el('div', 'status err');
+          if (!pay.cash && !pay.iban) { body.append(err, buttons(['Schließen', 'ghost', closeModal])); return; }
+          body.appendChild(el('div', 'muted', 'Tippe nach dem Bezahlen auf „Ich habe bezahlt“. Sobald der Admin deine Zahlung bestätigt, ist Pro freigeschaltet.'));
+          body.appendChild(err);
+          const acts = buttons(['Abbrechen', 'ghost', closeModal], ['Ich habe bezahlt', 'primary', async () => {
+            if (!relay.ready()) { err.textContent = 'Dafür muss unter Offline-Zustellung „Über den Server zustellen“ eingeschaltet sein.'; return; }
+            const b = acts.querySelector('.primary');
+            b.disabled = true;
+            try { setMine((await relay.pro.request()).status || 'pending'); draw(); }
+            catch { err.textContent = 'Das hat nicht geklappt. Bitte später nochmal versuchen.'; b.disabled = false; }
+          }]);
+          body.appendChild(acts);
+        };
+        drawOpen = draw;
+        draw();
+        refresh();
+      });
+    }
+    return { isPro, has, star, open, announce, refresh, refreshOthers, refreshOthersSoon, renderRow, status: () => mine.status };
+  })();
+
   // Einlöse-Codes (Liste mit allen Codes: CODES.md im Repo). Groß/klein, Leerzeichen und Bindestriche egal.
   const REDEEM_CODES = {
     FLAMMENMEER: ['frame:flames'],
@@ -1719,7 +1950,7 @@
     NEONNACHT: ['banner:neon'],
     GOLDRAUSCH: ['banner:gold'],
     STERNENSTAUB: ['banner:galaxy'],
-    WHATSUPVIP: [...Object.keys(FRAMES).filter((f) => FRAMES[f].locked).map((f) => 'frame:' + f), ...Object.keys(BANNERS).map((b) => 'banner:' + b)],
+    WHATSUPVIP: [...Object.keys(FRAMES).filter((f) => FRAMES[f].locked && !FRAMES[f].pro).map((f) => 'frame:' + f), ...Object.keys(BANNERS).filter((b) => !BANNERS[b].pro).map((b) => 'banner:' + b)],
   };
   let redeemed = store.load('redeemed', []);
   let challDone = store.load('challDone', 0); // geschaffte Wochen-Challenges (vom Server)
@@ -1727,6 +1958,11 @@
     const r = new Set(redeemed.flatMap((c) => REDEEM_CODES[c] || []));
     Object.keys(FRAMES).forEach((f) => { if (FRAMES[f].challenge && challDone >= FRAMES[f].challenge) r.add('frame:' + f); });
     Object.keys(BANNERS).forEach((b) => { if (BANNERS[b].challenge && challDone >= BANNERS[b].challenge) r.add('banner:' + b); });
+    // Pro: alle Rahmen und Banner (außer den Challenge-Belohnungen, die erspielt man)
+    if (pro.isPro()) {
+      Object.keys(FRAMES).forEach((f) => { if (FRAMES[f].locked && !FRAMES[f].challenge) r.add('frame:' + f); });
+      Object.keys(BANNERS).forEach((b) => { if (!BANNERS[b].challenge) r.add('banner:' + b); });
+    }
     return r;
   };
   // Neue Zahl geschaffter Challenges übernehmen; neu freigeschaltete Belohnungen melden
@@ -1757,7 +1993,7 @@
   }
   // Status als farbiges Banner
   function bannerEl(text, banner, pill) {
-    const b = el(pill ? 'span' : 'div', pill ? 'banner-pill' : 'banner', text);
+    const b = el(pill ? 'span' : 'div', (pill ? 'banner-pill' : 'banner') + (BANNERS[banner].anim ? ' anim' : ''), text);
     b.style.background = BANNERS[banner].bg;
     return b;
   }
@@ -1870,6 +2106,8 @@
     const meAv = $('meAvatar');
     meAv.replaceChildren(avatarEl(me.name, me.avatar, me.code, '', null, me.frame));
     $('meName').textContent = me.name;
+    const myStar = pro.star(me.code);
+    if (myStar) $('meName').appendChild(myStar);
     $('myCode').textContent = me.code;
 
     recap.renderBar();
@@ -1893,6 +2131,8 @@
       li.appendChild(chatAvatar(chatId, '', !isGroup));
       const meta = el('div', 'fmeta');
       const fn = el('div', 'fname', isGroup ? groups[code].name : nameOf(code));
+      const ps = isGroup ? null : pro.star(code);
+      if (ps) fn.appendChild(ps);
       const fb = isGroup ? '' : fire.badge(code);
       if (fb) fn.appendChild(el('span', 'fire', fb));
       meta.appendChild(fn);
@@ -2079,7 +2319,7 @@
       b.onclick = (e) => { e.stopPropagation(); closeMsgMenu(); fn(); };
       menu.appendChild(b);
     };
-    act('Spiel', 'Tic-Tac-Toe, Schere, Stein, Papier oder Millionen-Quiz', '🎮', () => minigames.openNew(chatId));
+    act('Spiel', 'Tic-Tac-Toe, Schere, Stein, Papier, Quiz, 4 gewinnt …', '🎮', () => minigames.openNew(chatId));
     act('Nachricht planen', 'Später automatisch senden', '🕓', () => scheduled.openNew(chatId));
     if (chatId.startsWith('g:')) act('Umfrage', 'Alle in der Gruppe stimmen ab', '📊', openNewPoll);
     document.body.appendChild(back);
@@ -2328,10 +2568,16 @@
   // Tic-Tac-Toe: m.mv = { Zugnummer: Feld 0–8 }, abwechselnd, ✕ = wer gestartet hat.
   // Schere, Stein, Papier: m.mv = { Code: 0 Stein | 1 Papier | 2 Schere }. Die Wahl des anderen siehst du erst, wenn du selbst gewählt hast.
   // Millionen-Quiz: Alle im Chat spielen für sich 15 Fragen, m.mv = { Code: erspielter Betrag }. Wer am meisten hat, gewinnt.
+  // 4 gewinnt (Pro): m.mv = { Zugnummer: Spalte 0–6 }, 🔴 = wer gestartet hat.
+  // Galgenmännchen (Pro): Der Starter wählt ein Wort (game.w), der Gegner rät: m.mv = { Zugnummer: Buchstabe 0–28 }.
   const minigames = (() => {
-    const KINDS = { ttt: { icon: '❌⭕', name: 'Tic-Tac-Toe' }, rps: { icon: '✊✋✌️', name: 'Schere, Stein, Papier' }, quiz: { icon: '💰', name: 'Millionen-Quiz' } };
+    const KINDS = {
+      ttt: { icon: '❌⭕', name: 'Tic-Tac-Toe' }, rps: { icon: '✊✋✌️', name: 'Schere, Stein, Papier' }, quiz: { icon: '💰', name: 'Millionen-Quiz' },
+      c4: { icon: '🔴🟡', name: '4 gewinnt', pro: true }, hang: { icon: '🔤', name: 'Galgenmännchen', pro: true },
+    };
     const RPS = ['✊', '✋', '✌️'], RPS_NAME = ['Stein', 'Papier', 'Schere'];
     const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+    const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', HANG_RE = /^[A-ZÄÖÜ]{3,14}$/, HANG_MAX = 8;
     const orphans = {}; // Züge, die vor der Spiel-Nachricht ankamen
     function valid(g, chatId, from) {
       if (!g || typeof g !== 'object' || !Object.hasOwn(KINDS, g.k)) return null;
@@ -2343,7 +2589,31 @@
         const grp = groups[chatId.slice(2)];
         if (!grp || !grp.members.includes(g.vs)) return null;
       }
+      if (g.k === 'hang') return typeof g.w === 'string' && HANG_RE.test(g.w) ? { k: 'hang', vs: g.vs, w: g.w } : null;
       return { k: g.k, vs: g.vs };
+    }
+    // 4 gewinnt: vier in einer Reihe durch das zuletzt gesetzte Feld?
+    function c4Win(b, r, c, who) {
+      for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+        const cells = [r * 7 + c];
+        for (const s of [1, -1]) {
+          let rr = r + dr * s, cc = c + dc * s;
+          while (rr >= 0 && rr < 6 && cc >= 0 && cc < 7 && b[rr * 7 + cc] === who) { cells.push(rr * 7 + cc); rr += dr * s; cc += dc * s; }
+        }
+        if (cells.length >= 4) return cells;
+      }
+      return null;
+    }
+    // Galgenmännchen: Bild wächst mit jedem Fehler (feste SVG-Teile, keine Nutzerdaten)
+    const HANG_PARTS = [
+      '<line x1="8" y1="88" x2="72" y2="88"/>', '<line x1="24" y1="88" x2="24" y2="8"/>', '<line x1="24" y1="8" x2="62" y2="8"/>',
+      '<line x1="62" y1="8" x2="62" y2="20"/>', '<circle cx="62" cy="28" r="8"/>', '<line x1="62" y1="36" x2="62" y2="60"/>',
+      '<path d="M50 48 62 42 74 48"/>', '<path d="M52 78 62 60 72 78"/>',
+    ];
+    function hangPic(wrong) {
+      const d = el('div', 'hang-pic');
+      d.innerHTML = `<svg viewBox="0 0 80 96" aria-hidden="true">${HANG_PARTS.map((p, i) => p.replace(/^<(\w+)/, `<$1 class="${i < wrong ? 'on' : 'off'}"`)).join('')}</svg>`;
+      return d;
     }
     // Beim Quiz spielen alle mit, die im Chat sind
     const chatMembers = (chatId) => (chatId.startsWith('u:') ? [me.code, chatId.slice(2)] : ((groups[chatId.slice(2)] || {}).members || []).slice());
@@ -2363,6 +2633,37 @@
         return { done, winner, res, players: ps, turn: null };
       }
       const [x, o] = players(m);
+      if (m.game.k === 'c4') {
+        const board = new Array(42).fill(null), heights = new Array(7).fill(0); // Feld = Reihe * 7 + Spalte, Reihe 0 oben
+        let n = 0, winner = null, line = null;
+        while (mv[n] != null && !winner && n < 42) {
+          const col = mv[n];
+          if (heights[col] >= 6) break; // ungültiger Zug: hier aufhören
+          const row = 5 - heights[col]++;
+          const who = n % 2 ? o : x;
+          board[row * 7 + col] = who;
+          n++;
+          line = c4Win(board, row, col, who);
+          if (line) winner = who;
+        }
+        const done = !!winner || n >= 42;
+        return { board, heights, n, winner, line, done, players: [x, o], turn: done ? null : (n % 2 ? o : x) };
+      }
+      if (m.game.k === 'hang') {
+        const word = m.game.w, guessed = [];
+        let wrong = 0, n = 0;
+        const solvedNow = () => [...word].every((ch) => guessed.includes(ch));
+        while (mv[n] != null && wrong < HANG_MAX && !solvedNow()) {
+          const L = ABC[mv[n]];
+          if (!L || guessed.includes(L)) break;
+          guessed.push(L);
+          if (!word.includes(L)) wrong++;
+          n++;
+        }
+        const solved = solvedNow(), done = solved || wrong >= HANG_MAX;
+        // x hat das Wort gewählt, o rät
+        return { word, guessed, wrong, n, solved, done, winner: done ? (solved ? o : x) : null, players: [x, o], turn: done ? null : o };
+      }
       if (m.game.k === 'rps') {
         const a = mv[x], b = mv[o], done = a != null && b != null;
         // 1 schlägt 0 (Papier > Stein), 2 schlägt 1 (Schere > Papier), 0 schlägt 2 (Stein > Schere)
@@ -2392,6 +2693,17 @@
       if (m.game.k === 'rps') {
         if (v < 0 || v > 2 || m.mv[from] != null) return false;
         m.mv[from] = v;
+        return true;
+      }
+      if (m.game.k === 'c4') {
+        if (!Number.isInteger(n) || n < 0 || n > 41 || v < 0 || v > 6 || m.mv[n] != null) return false;
+        if ((n % 2 ? m.game.vs : m.from) !== from) return false;
+        m.mv[n] = v;
+        return true;
+      }
+      if (m.game.k === 'hang') {
+        if (!Number.isInteger(n) || n < 0 || n >= ABC.length || v < 0 || v >= ABC.length || m.mv[n] != null || from !== m.game.vs) return false;
+        m.mv[n] = v;
         return true;
       }
       if (!Number.isInteger(n) || n < 0 || n > 8 || v < 0 || v > 8 || m.mv[n] != null) return false;
@@ -2428,6 +2740,8 @@
         const s = state(m);
         if (s.done || !players(m).includes(me.code)) return;
         if (m.game.k === 'ttt') { if (s.turn !== me.code || s.board[v] != null) return; n = s.n; }
+        if (m.game.k === 'c4') { if (s.turn !== me.code || s.heights[v] >= 6) return; n = s.n; }
+        if (m.game.k === 'hang') { if (s.turn !== me.code || s.guessed.includes(ABC[v])) return; n = s.n; }
         if (!apply(m, me.code, n, v)) return;
       }
       settle(m, chatId);
@@ -2453,7 +2767,7 @@
         if (s.done) text += s.winner === me.code ? ' – du hast gewonnen! 🎉' : s.winner ? ` – ${nameOf(s.winner)} gewinnt` : ' – Gleichstand 🤝';
         else if (s.res[me.code] == null) text += ' – schaffst du mehr?';
       } else if (s.done) text = s.winner === me.code ? 'Du hast gewonnen! 🎉' : s.winner ? `${who} hat gewonnen` : 'Unentschieden 🤝';
-      else if (m.game.k === 'ttt' && s.turn === me.code) text = `${who} hat gezogen – du bist dran!`;
+      else if ((m.game.k === 'ttt' || m.game.k === 'c4') && s.turn === me.code) text = `${who} hat gezogen – du bist dran!`;
       else if (m.game.k === 'rps') text = `${who} hat gewählt – jetzt du!`;
       if (text) notify(`${KINDS[m.game.k].icon} ${KINDS[m.game.k].name}`, text, { chatId, icon: contacts[from] && contacts[from].avatar });
     }
@@ -2511,7 +2825,50 @@
       box.appendChild(el('div', 'game-title', `${KINDS[m.game.k].icon} ${KINDS[m.game.k].name}`));
       if (m.game.k === 'quiz') { quizView(chatId, m, box); return box; }
       const s = state(m), [x, o] = players(m), meIn = players(m).includes(me.code);
-      if (m.game.k === 'ttt') {
+      if (m.game.k === 'c4') {
+        box.appendChild(el('div', 'game-sub', `${who(x)} 🔴 · ${who(o)} 🟡`));
+        const grid = el('div', 'c4');
+        const myTurn = !s.done && s.turn === me.code;
+        for (let col = 0; col < 7; col++) {
+          const b = el('button', 'c4-col');
+          b.type = 'button';
+          b.disabled = !myTurn || s.heights[col] >= 6;
+          b.setAttribute('aria-label', `Spalte ${col + 1}`);
+          for (let row = 0; row < 6; row++) {
+            const i = row * 7 + col, c = s.board[i];
+            b.appendChild(el('span', 'c4-cell' + (c ? (c === x ? ' r' : ' y') : '') + (s.line && s.line.includes(i) ? ' win' : '')));
+          }
+          b.onclick = (e) => { e.stopPropagation(); play(chatId, m, col); };
+          grid.appendChild(b);
+        }
+        box.appendChild(grid);
+      } else if (m.game.k === 'hang') {
+        const maker = me.code === x;
+        box.appendChild(el('div', 'game-sub', `${who(x)} ${maker ? 'hast' : 'hat'} ein Wort gewählt · ${who(o)} ${me.code === o ? 'rätst' : 'rät'}`));
+        const row = el('div', 'hang-row');
+        row.appendChild(hangPic(s.wrong));
+        const word = el('div', 'hang-word');
+        [...s.word].forEach((ch) => {
+          const known = s.guessed.includes(ch), show = known || s.done || maker; // wer das Wort gewählt hat, sieht es
+          word.appendChild(el('span', 'hang-ch' + (known ? ' hit' : show ? ' miss' : ''), show ? ch : ''));
+        });
+        const side = el('div', 'hang-side');
+        side.append(word, el('div', 'game-sub', `Fehler: ${s.wrong} von ${HANG_MAX}`));
+        row.appendChild(side);
+        box.appendChild(row);
+        if (me.code === o && !s.done) {
+          const kb = el('div', 'hang-keys');
+          [...ABC].forEach((L, i) => {
+            const used = s.guessed.includes(L);
+            const b = el('button', 'hang-key' + (used ? (s.word.includes(L) ? ' hit' : ' miss') : ''), L);
+            b.type = 'button';
+            b.disabled = used;
+            b.onclick = (e) => { e.stopPropagation(); play(chatId, m, i); };
+            kb.appendChild(b);
+          });
+          box.appendChild(kb);
+        }
+      } else if (m.game.k === 'ttt') {
         box.appendChild(el('div', 'game-sub', `${who(x)} ✕ · ${who(o)} ◯`));
         const grid = el('div', 'ttt');
         s.board.forEach((c, i) => {
@@ -2548,14 +2905,39 @@
         box.append(el('div', 'game-sub', line(x)), el('div', 'game-sub', line(o)));
       }
       let status = '';
-      if (s.done) status = s.winner ? (s.winner === me.code ? '🎉 Du hast gewonnen!' : `🏆 ${nameOf(s.winner)} hat gewonnen`) : '🤝 Unentschieden';
-      else if (m.game.k === 'ttt') status = s.turn === me.code ? '👉 Du bist dran' : `${nameOf(s.turn)} ist dran …`;
+      if (s.done && m.game.k === 'hang') {
+        status = s.solved ? (s.winner === me.code ? '🎉 Du hast das Wort erraten!' : `🏆 ${nameOf(s.winner)} hat das Wort erraten`)
+          : (s.winner === me.code ? '🎉 Du hast gewonnen! Das Wort wurde nicht erraten.' : `🏆 ${nameOf(s.winner)} hat gewonnen`);
+      } else if (s.done) status = s.winner ? (s.winner === me.code ? '🎉 Du hast gewonnen!' : `🏆 ${nameOf(s.winner)} hat gewonnen`) : '🤝 Unentschieden';
+      else if (m.game.k === 'ttt' || m.game.k === 'c4') status = s.turn === me.code ? '👉 Du bist dran' : `${nameOf(s.turn)} ist dran …`;
+      else if (m.game.k === 'hang') status = s.turn === me.code ? '👉 Tippe auf einen Buchstaben' : `${nameOf(s.turn)} rät …`;
       if (status) box.appendChild(el('div', 'game-status' + (s.done && s.winner === me.code ? ' won' : ''), status));
       if (s.done && meIn) box.appendChild(againBtn(chatId, m));
       return box;
     }
-    function start(chatId, k, vs) {
-      const game = valid({ k, vs }, chatId, me.code);
+    // Galgenmännchen: geheimes Wort wählen
+    function askWord(chatId, vs) {
+      openModal((box) => {
+        box.appendChild(el('h3', '', '🔤 Galgenmännchen'));
+        box.appendChild(el('div', 'muted', `Wähle ein Wort (3 bis 14 Buchstaben, ohne Leerzeichen). ${nameOf(vs)} muss es Buchstabe für Buchstabe erraten, bevor das Bild fertig ist.`));
+        const inp = el('input', 'hang-input');
+        inp.maxLength = 14; inp.autocomplete = 'off'; inp.spellcheck = false; inp.placeholder = 'Dein geheimes Wort';
+        const err = el('div', 'status err');
+        const go = () => {
+          const w = inp.value.trim().toUpperCase();
+          if (!HANG_RE.test(w)) { err.textContent = 'Nur Buchstaben (auch Ä, Ö, Ü), 3 bis 14 Stück.'; return; }
+          closeModal();
+          start(chatId, 'hang', vs, w);
+        };
+        inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } };
+        box.append(inp, err, buttons(['Abbrechen', 'ghost', closeModal], ['Herausfordern', 'primary', go]));
+        setTimeout(() => inp.focus(), 50);
+      });
+    }
+    function start(chatId, k, vs, w) {
+      if (KINDS[k] && KINDS[k].pro && !pro.isPro()) { pro.open(); return; }
+      if (k === 'hang' && !w) { askWord(chatId, vs); return; }
+      const game = valid({ k, vs, w }, chatId, me.code);
       if (!game) return;
       if (k === 'quiz') {
         const whom = chatId.startsWith('u:') ? nameOf(chatId.slice(2)) : 'alle';
@@ -2574,10 +2956,12 @@
         const pick = el('div', 'game-pick');
         const quizNote = el('div', 'muted hidden', isGroup ? 'Alle in der Gruppe können mitspielen. Jeder löst die Fragen für sich.' : `Du und ${nameOf(vs)} spielt die Fragen jeweils für euch.`);
         Object.entries(KINDS).forEach(([k, d]) => {
-          const b = el('button', 'game-kind' + (k === kind ? ' on' : ''));
+          const b = el('button', 'game-kind' + (k === kind ? ' on' : '') + (d.pro ? ' pro-only' : ''));
           b.type = 'button';
           b.append(el('span', 'game-kind-ic', d.icon), el('span', 'game-kind-name', d.name));
+          if (d.pro) b.append(el('span', 'game-kind-pro', '⭐ Pro'));
           b.onclick = () => {
+            if (d.pro && !pro.isPro()) { pro.open(); return; }
             kind = k;
             kinds.querySelectorAll('.game-kind').forEach((x) => x.classList.toggle('on', x === b));
             pick.classList.toggle('hidden', k === 'quiz');
@@ -3160,8 +3544,17 @@
     } else {
       const c = contacts[code];
       $('chatName').textContent = c.name;
+      const ps = pro.star(code);
+      if (ps) $('chatName').appendChild(ps);
       const fb = fire.badge(code);
       if (fb) $('chatName').appendChild(el('span', 'fire', fb));
+      if (fire.canRescue(code)) {
+        const r = el('button', 'fire-rescue', '🛟 Streak retten');
+        r.type = 'button';
+        r.title = 'Euer Streak ist gestern abgerissen. Mit WhatsUp Pro kannst du ihn retten.';
+        r.onclick = (e) => { e.stopPropagation(); fire.openRescue(code); };
+        $('chatName').appendChild(r);
+      }
       $('chatSub').textContent = (isOnline(code) ? 'online' : 'offline') + (c.status && !c.banner ? ' · ' + c.status : '');
       if (c.banner && c.status) { $('chatSub').append(' · '); $('chatSub').appendChild(bannerEl(c.status, c.banner, true)); }
       $('chatName').title = fb ? 'Streak: Schreibt euch jeden Tag beide mindestens eine Nachricht, sonst ist er weg.' : '';
@@ -3317,7 +3710,7 @@
     runModalClose();
     const box = $('modalBox');
     box.replaceChildren();
-    box.classList.remove('recap-box', 'quiz-box');
+    box.classList.remove('recap-box', 'quiz-box', 'pro-box', 'admin-box');
     delete box.dataset.owner;
     box.classList.remove('modal-big'); $('modal').classList.remove('modal-big'); // nur die Gruppen-Info ist groß
     box.scrollTop = 0;
@@ -3477,7 +3870,11 @@
       const av = mine ? me.avatar : c && c.avatar;
       const fr = mine ? me.frame : c && c.frame;
       head.appendChild(avatarEl(shownName, av, code, 'xl', c && c.friend ? isOnline(code) : null, fr));
-      head.appendChild(el('h3', '', mine ? `${shownName} (Du)` : shownName));
+      const h3 = el('h3', '', mine ? `${shownName} (Du)` : shownName);
+      head.appendChild(h3);
+      const star = pro.star(code);
+      if (star) h3.appendChild(star);
+      else if (!mine) relay.pro.list([code]).then((l) => { if (l.includes(code) && !h3.querySelector('.pro-star')) { const s = el('span', 'pro-star', '⭐'); s.title = 'WhatsUp Pro'; h3.appendChild(s); } }).catch(() => {});
       const banner = mine ? validBanner(me.banner) : c && c.banner;
       const status = mine ? me.status : c && c.status;
       if (banner) head.appendChild(bannerEl(status || shownName, banner));
@@ -3817,11 +4214,165 @@
     if (!relay.ready() || !(await relay.isAdmin())) { $('adminSection').classList.add('hidden'); return; }
     $('adminSection').classList.remove('hidden');
     $('adminCount').textContent = 'wird geladen…';
+    loadPurchases().catch(() => { $('adminPurchCount').textContent = 'nicht erreichbar'; });
     try {
       adminData = await relay.adminUsers();
       $('adminCount').textContent = `${adminData.count} · ${adminData.active24h} heute aktiv`;
     } catch { $('adminCount').textContent = 'nicht erreichbar'; }
   }
+
+  // ---------- Admin: Einkäufe (WhatsUp Pro, bar oder per Überweisung) ----------
+  let purchData = null;
+  const PURCH_STATUS = { confirm: 'paid', reject: 'rejected', revoke: 'revoked' };
+  function purchCount(d) {
+    const paid = d.purchases.filter((p) => p.status === 'paid').length;
+    $('adminPurchCount').textContent = (d.pending ? `🔴 ${d.pending} offen · ` : 'Nichts offen · ') + `${paid} bestätigt`;
+    $('adminPayState').textContent = payText(d.pay);
+  }
+  async function loadPurchases() { purchData = await relay.pro.purchases(); purchCount(purchData); return purchData; }
+  function openAdminPurchases() {
+    openModal((box) => {
+      box.classList.add('admin-box');
+      box.appendChild(el('h3', '', '🛒 Einkäufe'));
+      box.appendChild(el('div', 'muted', `WhatsUp Pro für ${(purchData && purchData.price) || 2} CHF. Vergleiche mit deinen Zahlungen (bar oder Überweisung mit Code in der Mitteilung) und bestätige oder lehne ab.`));
+      const TABS = [['pending', 'Offen'], ['paid', 'Bestätigt'], ['rejected', 'Abgelehnt']];
+      const inTab = (p, k) => (k === 'rejected' ? p.status === 'rejected' || p.status === 'revoked' : p.status === k);
+      let tab = 'pending';
+      const tabs = el('div', 'segmented purch-tabs');
+      const ul = el('ul', 'members admin-list purch-list');
+      const draw = () => {
+        const d = purchData;
+        tabs.replaceChildren(...TABS.map(([k, label]) => {
+          const n = d ? d.purchases.filter((p) => inTab(p, k)).length : 0;
+          const b = el('button', tab === k ? 'active' : '', label + (n ? ` (${n})` : ''));
+          b.type = 'button';
+          b.onclick = () => { tab = k; draw(); };
+          return b;
+        }));
+        ul.replaceChildren();
+        if (!d) { ul.appendChild(el('li', 'muted', 'Wird geladen …')); return; }
+        const list = d.purchases.filter((p) => inTab(p, tab));
+        if (!list.length) ul.appendChild(el('li', 'muted', { pending: 'Keine offenen Einkäufe.', paid: 'Noch niemand bestätigt.', rejected: 'Nichts abgelehnt.' }[tab]));
+        list.forEach((p) => {
+          const li = el('li', 'purch-row');
+          const c = contacts[p.code];
+          li.appendChild(avatarEl(p.name || p.code, c && c.avatar, p.code, '', null, c && c.frame));
+          const when = p.status === 'pending' ? 'gemeldet ' + agoText(p.requested)
+            : ({ paid: 'bestätigt ', rejected: 'abgelehnt ', revoked: 'entzogen ' }[p.status] || '') + agoText(p.decided || p.requested);
+          const meta = el('div', 'fmeta');
+          meta.append(el('div', 'fname', p.name || 'Unbekannt'), el('div', 'flast', `${p.code} · ${when}`));
+          li.appendChild(meta);
+          const acts = el('div', 'purch-acts');
+          const act = (label, cls, action, ask) => {
+            const b = el('button', cls, label);
+            b.type = 'button';
+            b.onclick = async (e) => {
+              e.stopPropagation();
+              if (ask && !confirm(ask)) return;
+              b.disabled = true;
+              try {
+                await relay.pro.decide(p.code, action);
+                p.status = PURCH_STATUS[action]; p.decided = Date.now();
+                d.pending = d.purchases.filter((x) => x.status === 'pending').length;
+                purchCount(d);
+                toast(action === 'confirm' ? `⭐ ${p.name || p.code} ist jetzt Pro` : action === 'reject' ? 'Abgelehnt' : 'Pro entzogen');
+                draw();
+              } catch { toast('Das hat nicht geklappt'); b.disabled = false; }
+            };
+            return b;
+          };
+          if (p.status === 'pending') acts.append(act('✓ Bestätigen', 'purch-ok', 'confirm'), act('✕', 'purch-no', 'reject', `Zahlung von ${p.name || p.code} ablehnen?`));
+          else if (p.status === 'paid') acts.append(act('Entziehen', 'link muted-link', 'revoke', `WhatsUp Pro von ${p.name || p.code} wirklich entziehen?`));
+          else acts.append(act('Doch bestätigen', 'link', 'confirm'));
+          li.appendChild(acts);
+          ul.appendChild(li);
+        });
+      };
+      box.append(tabs, ul);
+      // Pro direkt freischalten (z. B. verschenken oder Barzahlung)
+      const gift = el('form', 'purch-gift');
+      const inp = el('input');
+      inp.placeholder = 'Code direkt freischalten'; inp.maxLength = 6; inp.autocomplete = 'off'; inp.spellcheck = false;
+      const gb = el('button', 'link', 'Freischalten');
+      gb.type = 'submit';
+      gift.append(inp, gb);
+      gift.onsubmit = async (e) => {
+        e.preventDefault();
+        const code = inp.value.trim().toUpperCase();
+        if (!CODE_RE.test(code)) { toast('Ein Code hat genau 6 Zeichen'); return; }
+        try { await relay.pro.decide(code, 'confirm'); inp.value = ''; toast(`⭐ ${nameOf(code)} ist jetzt Pro`); await loadPurchases(); tab = 'paid'; draw(); }
+        catch { toast('Das hat nicht geklappt'); }
+      };
+      box.append(gift, buttons(['Schließen', 'primary', closeModal]));
+      draw();
+      loadPurchases().then(draw).catch(() => ul.replaceChildren(el('li', 'muted', 'Server nicht erreichbar.')));
+    });
+  }
+  $('adminPurchBtn').onclick = openAdminPurchases;
+
+  // Zahlungsarten für WhatsUp Pro: bar und/oder Überweisung (liegt auf dem Server, nicht im öffentlichen Code)
+  const payText = (p) => (p && (p.cash || p.iban) ? [p.cash && 'Bar', p.iban && 'Überweisung'].filter(Boolean).join(' · ') : '⚠️ Noch keine, Käufer können nicht bezahlen');
+  function ibanOk(v) {
+    const iban = String(v || '').toUpperCase().replace(/\s+/g, '');
+    if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return null;
+    const digits = (iban.slice(4) + iban.slice(0, 4)).replace(/[A-Z]/g, (ch) => String(ch.charCodeAt(0) - 55));
+    let r = 0;
+    for (const d of digits) r = (r * 10 + Number(d)) % 97;
+    return r === 1 ? iban : null;
+  }
+  function openAdminPay() {
+    openModal((box) => {
+      box.classList.add('admin-box');
+      box.appendChild(el('h3', '', '💳 Zahlungsarten'));
+      box.appendChild(el('div', 'muted', 'So können Käufer WhatsUp Pro bezahlen. Was du hier einträgst, sehen alle, die „WhatsUp Pro“ öffnen.'));
+      const sw = () => { const i = el('input'); i.type = 'checkbox'; i.className = 'switch'; return i; };
+      const field = (label, ph, max) => { const l = el('label', 'field', label); const i = el('input'); i.placeholder = ph; i.maxLength = max; i.autocomplete = 'off'; l.appendChild(i); return [l, i]; };
+      // Bar
+      const cash = sw();
+      const cashRow = el('label', 'setting');
+      cashRow.append(el('span', '', 'Barzahlung'), cash);
+      const [noteL, note] = field('Hinweis für Käufer', 'z. B. „Gib mir 2 CHF in der Pause“', 120);
+      // Überweisung
+      const bank = sw();
+      const bankRow = el('label', 'setting');
+      bankRow.append(el('span', '', 'Überweisung'), bank);
+      const [nameL, name] = field('Empfänger (wie auf dem Konto)', 'Vor- und Nachname', 60);
+      const [ibanL, iban] = field('IBAN', 'CH00 0000 0000 0000 0000 0', 42);
+      iban.spellcheck = false;
+      const g1 = el('div', 'group'); g1.append(cashRow);
+      const g2 = el('div', 'group'); g2.append(bankRow);
+      const cashBox = el('div', 'pay-fields'); cashBox.append(noteL);
+      const bankBox = el('div', 'pay-fields'); bankBox.append(nameL, ibanL);
+      const sync = () => { cashBox.classList.toggle('hidden', !cash.checked); bankBox.classList.toggle('hidden', !bank.checked); };
+      cash.onchange = bank.onchange = sync;
+      const err = el('div', 'status err');
+      let touched = false;
+      [cash, bank, note, name, iban].forEach((i) => i.addEventListener('input', () => { touched = true; }));
+      const fill = (p) => {
+        if (touched) return; // nichts überschreiben, was gerade eingetippt wird
+        p = p || {};
+        cash.checked = !!p.cash; note.value = p.cashNote || '';
+        bank.checked = !!p.iban; name.value = p.name || ''; iban.value = (p.iban || '').replace(/(.{4})/g, '$1 ').trim();
+        sync();
+      };
+      fill(purchData && purchData.pay);
+      const save = async () => {
+        err.textContent = '';
+        const pay = { cash: cash.checked, cashNote: note.value.trim(), iban: '', name: '' };
+        if (bank.checked) {
+          pay.iban = ibanOk(iban.value);
+          pay.name = name.value.trim();
+          if (!pay.iban) { err.textContent = 'Diese IBAN stimmt nicht. Bitte nochmal prüfen.'; return; }
+          if (!pay.name) { err.textContent = 'Bitte gib den Namen an, auf den das Konto läuft.'; return; }
+        }
+        try { await relay.pro.setPay(pay); toast('Zahlungsarten gespeichert'); closeModal(); loadPurchases().catch(() => {}); }
+        catch { err.textContent = 'Das hat nicht geklappt. Bitte später nochmal versuchen.'; }
+      };
+      box.append(g1, cashBox, g2, bankBox, err, buttons(['Abbrechen', 'ghost', closeModal], ['Speichern', 'primary', save]));
+      loadPurchases().then((d) => fill(d.pay)).catch(() => {});
+    });
+  }
+  $('adminPayBtn').onclick = openAdminPay;
   function openAdminUsers() {
     openModal((box) => {
       box.appendChild(el('h3', '', '👥 Nutzer von WhatsUp'));
@@ -3865,8 +4416,10 @@
   }
   $('adminUsersBtn').onclick = openAdminUsers;
 
+  $('proCard').onclick = () => pro.open();
   function openSettings() {
     refreshAdmin();
+    pro.renderRow(); pro.refresh();
     draftAvatar = me.avatar || null;
     draftFrame = validFrame(me.frame);
     draftBanner = validBanner(me.banner);
@@ -3953,14 +4506,15 @@
     const grid = $('frameGrid');
     grid.replaceChildren();
     [null, ...Object.keys(FRAMES)].forEach((id) => {
-      const locked = frameLocked(id);
-      const b = el('button', 'frame-opt' + (id === draftFrame ? ' active' : '') + (id && FRAMES[id].locked ? ' exclusive' : '') + (locked ? ' locked' : ''));
+      const locked = frameLocked(id), proOnly = !!(id && FRAMES[id].pro);
+      const b = el('button', 'frame-opt' + (id === draftFrame ? ' active' : '') + (id && FRAMES[id].locked ? ' exclusive' : '') + (locked ? ' locked' : '') + (proOnly ? ' pro-only' : ''));
       b.type = 'button';
-      b.title = id ? FRAMES[id].name + (locked ? (FRAMES[id].challenge ? ` – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges` : ' – mit einem Code freischalten (Erfolge)') : '') : 'Kein Rahmen';
+      b.title = id ? FRAMES[id].name + (locked ? (proOnly ? ' – mit WhatsUp Pro' : FRAMES[id].challenge ? ` – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges` : ' – mit einem Code oder WhatsUp Pro freischalten') : '') : 'Kein Rahmen';
       b.appendChild(avatarEl(name, draftAvatar, me.code, 'md', null, id));
       b.appendChild(el('span', 'frame-name', id ? FRAMES[id].name : 'Keiner'));
       b.onclick = () => {
-        if (locked) { toast('🔒 Exklusiver Rahmen – Code einlösen unter Erfolge 🏆'); return; }
+        if (locked && (proOnly || !FRAMES[id].challenge)) { pro.open(); return; }
+        if (locked) { toast(`🔒 Challenge-Belohnung – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges`); return; }
         draftFrame = id; renderProfAvatar(); markProfileDirty(profileDirty());
       };
       grid.appendChild(b);
@@ -3969,13 +4523,14 @@
     const bg = $('bannerGrid');
     bg.replaceChildren();
     [null, ...Object.keys(BANNERS)].forEach((id) => {
-      const locked = bannerLocked(id);
-      const b = el('button', 'banner-opt' + (id ? '' : ' none') + (id === draftBanner ? ' active' : '') + (locked ? ' locked' : ''), id ? BANNERS[id].name : 'Kein Banner');
+      const locked = bannerLocked(id), proOnly = !!(id && BANNERS[id].pro);
+      const b = el('button', 'banner-opt' + (id ? '' : ' none') + (id === draftBanner ? ' active' : '') + (locked ? ' locked' : '') + (proOnly ? ' pro-only' : '') + (id && BANNERS[id].anim ? ' anim' : ''), id ? BANNERS[id].name : 'Kein Banner');
       b.type = 'button';
       if (id) b.style.background = BANNERS[id].bg;
-      b.title = locked ? 'Mit einem Code freischalten (Erfolge)' : '';
+      b.title = locked ? (proOnly ? 'Mit WhatsUp Pro' : BANNERS[id].challenge ? `Ab ${BANNERS[id].challenge} geschafften Wochen-Challenges` : 'Mit einem Code oder WhatsUp Pro freischalten') : '';
       b.onclick = () => {
-        if (locked) { toast('🔒 Exklusives Banner – Code einlösen unter Erfolge 🏆'); return; }
+        if (locked && (proOnly || !BANNERS[id].challenge)) { pro.open(); return; }
+        if (locked) { toast(`🔒 Challenge-Belohnung – ab ${BANNERS[id].challenge} geschafften Wochen-Challenges`); return; }
         draftBanner = id; renderProfAvatar(); markProfileDirty(profileDirty());
       };
       bg.appendChild(b);
@@ -4023,11 +4578,15 @@
     ['classic', 'Standard'], ['liquid', 'Liquid Glass'], ['galaxy', 'Galaxy'], ['synthwave', 'Synthwave'],
     ['tiefsee', 'Tiefsee'], ['sakura', 'Kirschblüte'], ['winter', 'Winterzauber'], ['fireflies', 'Glühwürmchen'],
     ['lava', 'Lavalampe'], ['storm', 'Gewitter'], ['sunset', 'Abendrot'], ['gold', 'Goldstaub'],
+    // Nur mit WhatsUp Pro
+    ['aurora', 'Polarlicht', 'pro'], ['coderain', 'Code-Regen', 'pro'], ['volcano', 'Vulkan', 'pro'],
   ];
+  function isProDesign(id) { return DESIGNS.some((d) => d[0] === id && d[2] === 'pro'); }
   const ADAPTIVE = ['classic', 'liquid'];
   if (!DESIGNS.some(([id]) => id === settings.design)) settings.design = 'classic';
   function applyTheme() {
     const root = document.documentElement;
+    if (isProDesign(settings.design) && !pro.isPro()) settings.design = 'classic';
     if (settings.theme === 'system') root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', settings.theme);
     if (settings.design === 'classic') root.removeAttribute('data-design');
@@ -4045,13 +4604,17 @@
   $('themeSeg').querySelectorAll('button').forEach((b) => {
     b.onclick = () => { settings.theme = b.dataset.theme; saveSettings(); applyTheme(); renderTheme(); sendPrefs(); };
   });
-  for (const [id, name] of DESIGNS) {
-    const b = el('button', 'design-opt');
+  for (const [id, name, tag] of DESIGNS) {
+    const b = el('button', 'design-opt' + (tag === 'pro' ? ' pro-only' : ''));
     b.dataset.design = id;
-    b.title = name;
+    b.title = name + (tag === 'pro' ? ' – mit WhatsUp Pro' : '');
     b.append(el('span', 'dz-scene'), el('span', 'dz-b1'), el('span', 'dz-b2'), el('span', 'dz-name', name), el('span', 'dz-check', '✓'));
+    if (tag === 'pro') b.append(el('span', 'dz-pro', '⭐ Pro'));
     if (window.ThemeFx) window.ThemeFx.preview(b, id);   // Mini-Szene (nur Designs mit bewegtem Hintergrund)
-    b.onclick = () => { settings.design = id; saveSettings(); applyTheme(); renderTheme(); sendPrefs(); };
+    b.onclick = () => {
+      if (tag === 'pro' && !pro.isPro()) { pro.open(); return; }
+      settings.design = id; saveSettings(); applyTheme(); renderTheme(); sendPrefs();
+    };
     $('designGrid').append(b);
   }
 
@@ -4376,7 +4939,11 @@
       if (D === f.last) return;
       if (f.n && D === f.last + 1) { f.n++; f.last = D; }
       else if (f.n && D < f.last) { if (D === f.last - f.n) f.n++; else return; } // verspätete Nachricht von gestern
-      else { f.n = 1; f.last = D; }
+      else {
+        // Genau ein Tag verpasst: alten Streak merken, damit ihn der Streak-Retter (Pro) zurückholen kann
+        f.prev = f.n && f.last === D - 2 ? { n: f.n, last: f.last } : null;
+        f.n = 1; f.last = D;
+      }
       f.lostShown = 0;
       stats.maxFire = Math.max(stats.maxFire || 0, f.n);
       if (MILESTONES.includes(f.n)) toast(`🔥 ${f.n} Tage Streak mit ${nameOf(code)}!`, true);
@@ -4408,7 +4975,7 @@
         if (!f || !f.n) continue;
         if (f.n >= 3 && f.last < today() - 1 && f.lostShown !== f.last) {
           f.lostShown = f.last;
-          toast(`💔 Streak mit ${nameOf(code)} verloren (${f.n} Tage)`);
+          toast(`💔 Streak mit ${nameOf(code)} verloren (${f.n} Tage)` + (f.last === today() - 2 ? ' · 🛟 Im Chat retten' : ''));
           saveMeta();
         }
         if (f.n >= 3 && atRisk(code) && hoursLeft() < 4 && f.reminded !== today()) {
@@ -4420,7 +4987,61 @@
       scheduleRender();
     }
     const currentMax = () => Math.max(0, ...friendCodes().map(current));
-    return { mark, badge, hint, current, tick, currentMax };
+
+    // ---------- Streak-Retter (WhatsUp Pro): einmal im Monat einen verpassten Tag retten ----------
+    // Verpasst ist immer „gestern“. Beide Geräte wenden die Rettung an (Nachricht „firesave“), damit der Streak gleich bleibt.
+    const monthKey = () => new Date().toISOString().slice(0, 7);
+    const savedThisMonth = () => store.load('fireSaveMonth', '') === monthKey();
+    // Streak, der gerettet würde (0 = nichts zu retten)
+    function lostStreak(code, M = today() - 1) {
+      const f = contacts[code] && contacts[code].fire;
+      if (!f || !f.n || f.saved === M) return 0;
+      if (f.last === M - 1) return f.n;                                         // heute noch nicht wieder geschrieben
+      if (f.n === 1 && f.last === M + 1 && f.prev && f.prev.last === M - 1) return f.prev.n; // heute schon neu angefangen
+      return 0;
+    }
+    const canRescue = (code) => isFriend(code) && lostStreak(code) >= 2;
+    function rescueDay(code, M) {
+      const f = rec(code);
+      if (!f || f.saved === M) return false;
+      if (f.n && f.last === M - 1) { f.n++; f.last = M; }
+      else if (f.n === 1 && f.last === M + 1 && f.prev && f.prev.last === M - 1) { f.n = f.prev.n + 2; f.last = M + 1; }
+      else return false;
+      f.prev = null; f.saved = M; f.lostShown = 0;
+      stats.maxFire = Math.max(stats.maxFire || 0, f.n);
+      saveMeta(); scheduleRender(); checkAchievements();
+      return true;
+    }
+    function openRescue(code) {
+      const n = lostStreak(code);
+      if (!n) return;
+      if (!pro.isPro()) { pro.open(); return; }
+      openModal((box) => {
+        box.appendChild(el('h3', '', '🛟 Streak retten'));
+        box.appendChild(el('div', '', `Euer ${n}-Tage-Streak mit ${nameOf(code)} ist gestern abgerissen.`));
+        if (savedThisMonth()) {
+          box.appendChild(el('div', 'muted', 'Du hast den Streak-Retter diesen Monat schon benutzt. Ab dem 1. geht es wieder.'));
+          box.appendChild(buttons(['OK', 'primary', closeModal]));
+          return;
+        }
+        box.appendChild(el('div', 'muted', 'Mit WhatsUp Pro kannst du einmal im Monat einen verpassten Tag retten. Der Streak läuft dann für euch beide weiter.'));
+        box.appendChild(buttons(['Abbrechen', 'ghost', closeModal], ['Retten', 'primary', () => {
+          const M = today() - 1;
+          if (!rescueDay(code, M)) { closeModal(); toast('Das geht leider nicht mehr.'); return; }
+          store.save('fireSaveMonth', monthKey());
+          sendData(code, { type: 'firesave', day: M });
+          closeModal();
+          toast(`🛟 Gerettet! 🔥 ${current(code)} Tage mit ${nameOf(code)}`, true);
+        }]));
+      });
+    }
+    // Der Freund hat unseren gemeinsamen Streak gerettet
+    function remoteRescue(code, day) {
+      const M = Math.floor(Number(day));
+      if (!isFriend(code) || !Number.isFinite(M) || M < today() - 3 || M > today()) return;
+      if (rescueDay(code, M)) toast(`🛟 ${nameOf(code)} hat euren Streak gerettet! 🔥 ${current(code)}`, true);
+    }
+    return { mark, badge, hint, current, tick, currentMax, canRescue, openRescue, remoteRescue };
   })();
 
   // ================= Sticker (nur für einen bestimmten Nutzer) =================
@@ -7545,7 +8166,7 @@
   //  - Pro Nachricht: Einmal-Schlüssel (ECDH) -> HKDF -> AES-256-GCM, Absender signiert alles
   const relay = (() => {
     const DEFAULT_URL = 'https://whatsup-relay.whatsup-relay.workers.dev';
-    const RELAY_TYPES = new Set(['msg', 'gmsg', 'ack', 'group', 'gleave', 'hello', 'status', 'sdel', 'sreact', 'sseen', 'callmiss', 'hreq', 'mact', 'read']);
+    const RELAY_TYPES = new Set(['msg', 'gmsg', 'ack', 'group', 'gleave', 'hello', 'status', 'sdel', 'sreact', 'sseen', 'callmiss', 'hreq', 'mact', 'read', 'firesave']);
     // Push aufs Handy nur für echte Nachrichten und Reaktionen (Profil, Gruppen-Abgleich, Bestätigungen usw. still)
     const PUSH_TYPES = new Set(['msg', 'gmsg', 'sreact', 'callmiss']);
     const te = new TextEncoder(), td = new TextDecoder();
@@ -7861,6 +8482,22 @@
       const ts = Date.now();
       return post('/v1/ice', { code: me.code, ts, sig: await sign(`ice|${me.code}|${ts}`) });
     }
+    // ---------- WhatsUp Pro ----------
+    async function signedPro(what, text, extra = {}) {
+      if (!ready || !ident) throw new Error('Briefkasten-Server nicht bereit');
+      const ts = Date.now();
+      return post('/v1/pro/' + what, { code: me.code, ts, sig: await sign(text(ts)), ...extra });
+    }
+    const proApi = {
+      list: async (codes) => (await post('/v1/pro/list', { codes })).pro || [],
+      status: () => signedPro('status', (ts) => `prostatus|${me.code}|${ts}`),
+      request: () => signedPro('request', (ts) => `prorequest|${me.code}|${ts}`, { name: me.name }),
+      checkout: () => signedPro('checkout', (ts) => `procheckout|${me.code}|${ts}`),
+      // Admin
+      purchases: () => signedPro('purchases', (ts) => `adminpurchases|${me.code}|${ts}`),
+      decide: (target, action) => signedPro('decide', (ts) => `admindecide|${me.code}|${ts}|${target}|${action}`, { target, action }),
+      setPay: (pay) => { const s = JSON.stringify(pay); return signedPro('pay', (ts) => `adminpay|${me.code}|${ts}|${s}`, { pay: s }); },
+    };
     // Weltweite Zahlen: { counts: { id: Anzahl }, players }. Höchstens alle 5 Minuten neu laden.
     let achStatsCache = store.load('achStats', null);
     let achStatsLoading = null;
@@ -7920,16 +8557,20 @@
       reportAchievements();
       setTimeout(reportSeen, 3000); // nach dem Start, wenn die Version bekannt ist
       setTimeout(() => games.reportProgress(), 6000); // Challenge-Fortschritt (Nachrichten, Streak)
+      setTimeout(() => { pro.refresh(); pro.refreshOthers(); }, 2000); // WhatsUp Pro: eigener Status und ⭐ der Freunde
     }
 
     // Abholen: beim Start, jede Minute, beim Zurückkehren in die App und wenn das Netz wieder da ist
     setInterval(() => poll(), 60000);
+    // Wartet eine Pro-Zahlung auf Bestätigung: jede Minute nachschauen; ⭐ der Freunde alle 30 Minuten
+    setInterval(() => { if (pro.status() === 'pending') pro.refresh(); }, 60000);
+    setInterval(() => pro.refreshOthers(), 30 * 60000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
     if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'relay-poll') poll(); });
     window.addEventListener('online', () => poll());
 
     return {
-      start, poll, send, setupPush, pushTest, saveNames, renderRelayStatus, reportAchievements, achStats, reportSeen, adminUsers, isAdmin, ice,
+      start, poll, send, setupPush, pushTest, saveNames, renderRelayStatus, reportAchievements, achStats, reportSeen, adminUsers, isAdmin, ice, pro: proApi,
       newIdentity, rotationRequest, rotate, serverHasKey, enabled, url, backupKeys, importBackupKeys,
       canSend: (code) => ready && enabled() && known[code] !== false,
       ready: () => ready && enabled(),
@@ -8500,6 +9141,7 @@
     stories.prune();
     setInterval(() => stories.prune(), 5 * 60 * 1000);
     setTimeout(() => fire.tick(), 3000);
+    setTimeout(() => pro.announce(), 4000); // einmalig: „Bald gibt es WhatsUp Pro“
     setInterval(() => fire.tick(), 10 * 60 * 1000);
     checkAchievements();
     render();

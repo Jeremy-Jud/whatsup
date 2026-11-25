@@ -95,6 +95,8 @@ export default {
     }
     // WhatsUp Pro: bar oder per Überweisung bezahlen, der Admin bestätigt die Zahlung
     if (parts[1] === 'pro') return proRoute(req, env, parts);
+    // Gemeinschafts-Events (z. B. Weihnachten): alle zusammen erreichen ein Ziel
+    if (parts[1] === 'event') return eventRoute(req, env, parts, url);
     // UpReels: Videos gehen an den Speicher des jeweiligen Reels, alles andere an den zentralen Index
     if (parts[1] === 'reels') {
       if (parts[2] === 'video' && /^[a-z0-9]{16,40}$/.test(parts[3] || '') && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -347,10 +349,44 @@ export class AchStats {
     // WhatsUp Pro: Kaufanfragen (status: pending | paid | rejected | revoked) und Einstellungen (Zahlungsarten)
     this.sql.exec('CREATE TABLE IF NOT EXISTS purchases (code TEXT PRIMARY KEY, name TEXT, status TEXT, requested INTEGER, decided INTEGER)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)');
+    // Events: gesendete Nachrichten pro Code (day/base begrenzen, wie viel pro Tag dazukommen darf)
+    this.sql.exec('CREATE TABLE IF NOT EXISTS event_counts (event TEXT, code TEXT, sent INTEGER, day TEXT, base INTEGER, PRIMARY KEY (event, code))');
+    this.evCache = null;
     // Geschenke vom Admin: kind = frame | banner | design | pro, claimed = Zeitpunkt des Einforderns (0 = offen)
     this.sql.exec('CREATE TABLE IF NOT EXISTS gifts (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, kind TEXT, item TEXT, fromName TEXT, created INTEGER, claimed INTEGER DEFAULT 0)');
     this.cache = null; // { at, body }
     this.lbCache = {};
+  }
+  // ---------- Events ----------
+  async event(path, req) {
+    const b = await req.json().catch(() => ({}));
+    const { id, conf } = b;
+    const now = Date.now();
+    const mineOf = (c) => (c ? (this.sql.exec('SELECT sent FROM event_counts WHERE event = ? AND code = ?', id, c).toArray()[0] || {}).sent || 0 : 0);
+    if (path === '/event/report') {
+      if (now < conf.start || now >= conf.end) return json({ ok: false, closed: true, mine: mineOf(b.code) });
+      const day = new Date(now).toISOString().slice(0, 10);
+      const r = this.sql.exec('SELECT sent, day, base FROM event_counts WHERE event = ? AND code = ?', id, b.code).toArray()[0] || { sent: 0, day, base: 0 };
+      const base = r.day === day ? r.base : r.sent;
+      // nur hochzählen; höchstens perDay pro Tag und perCode insgesamt (gegen Schummeln)
+      const val = Math.max(r.sent, Math.min(Math.floor(b.sent), base + conf.perDay, conf.perCode));
+      this.sql.exec('INSERT OR REPLACE INTO event_counts (event, code, sent, day, base) VALUES (?, ?, ?, ?, ?)', id, b.code, val, day, base);
+      this.evCache = null;
+      return json({ ok: true, mine: val });
+    }
+    if (path === '/event/status') {
+      if (!this.evCache || this.evCache.id !== id || now - this.evCache.at > 20000) {
+        const t = this.sql.exec('SELECT COALESCE(SUM(sent), 0) AS total, COUNT(*) AS n FROM event_counts WHERE event = ? AND sent > 0', id).toArray()[0];
+        this.evCache = { id, at: now, total: t.total, n: t.n };
+      }
+      const mine = mineOf(b.me);
+      const reached = this.evCache.total >= conf.goal;
+      return json({
+        id, goal: conf.goal, total: this.evCache.total, participants: this.evCache.n, start: conf.start, end: conf.end, now,
+        mine, reached, ended: now >= conf.end, eligible: reached && now >= conf.end && mine > 0,
+      });
+    }
+    return fail(404, 'not found');
   }
   kvGet(k) { const r = this.sql.exec('SELECT v FROM kv WHERE k = ?', k).toArray(); return r.length ? r[0].v : null; }
   // Zahlungsarten des Admins: { cash, cashNote, iban, name } oder null
@@ -482,6 +518,7 @@ export class AchStats {
       return json({ ok: true });
     }
     if (path.startsWith('/pro/')) return this.pro(path, req);
+    if (path.startsWith('/event/')) return this.event(path, req);
     if (path === '/seen') { // nur intern vom Briefkasten (Signatur dort geprüft)
       const b = await req.json();
       const { code, name, ver, plat } = b;
@@ -697,6 +734,40 @@ async function proRoute(req, env, parts) {
   try { p = cleanPay(JSON.parse(pay)); } catch { /* ungültig */ }
   if (!p) return fail(400, 'bad payment info');
   return internal('/pro/pay', { pay: p });
+}
+
+// ---------- Gemeinschafts-Events ----------
+// Alle zusammen verschicken Nachrichten. Wird das Ziel bis zum Ende erreicht, bekommt jeder, der mitgemacht hat,
+// eine exklusive Belohnung (gibt es danach nie wieder). Zum Testen: EVENT_TEST_GOAL / EVENT_TEST_END (Zeitpunkt in ms).
+const EVENTS = {
+  xmas2026: { goal: 10000, start: Date.UTC(2026, 10, 25), end: Date.UTC(2026, 11, 24, 23), perDay: 400, perCode: 2000 }, // bis 25.12. 00:00 (Schweiz)
+};
+function eventConf(env, id) {
+  if (!Object.hasOwn(EVENTS, id)) return null;
+  const c = { ...EVENTS[id] };
+  const g = Number(clean(env.EVENT_TEST_GOAL)), e = Number(clean(env.EVENT_TEST_END));
+  if (g > 0) c.goal = g;
+  if (e > 0) c.end = e;
+  return c;
+}
+async function eventRoute(req, env, parts, url) {
+  const id = String(parts[2] || ''), conf = eventConf(env, id);
+  if (!conf) return fail(404, 'not found');
+  const stats = env.ACHSTATS.get(env.ACHSTATS.idFromName('global'));
+  const internal = (path, body) => stats.fetch('https://stats' + path, { method: 'POST', body: JSON.stringify(body) });
+  // Stand (öffentlich), mit ?me=CODE auch der eigene Beitrag
+  if (req.method === 'GET' && !parts[3]) {
+    const me = String(url.searchParams.get('me') || '').toUpperCase();
+    return internal('/event/status', { id, conf, me: CODE_RE.test(me) ? me : null });
+  }
+  // Eigene Nachrichten melden (signiert)
+  if (req.method === 'POST' && parts[3] === 'report') {
+    const b = await req.json().catch(() => ({}));
+    const code = String(b.code || '').toUpperCase(), sent = Math.floor(Number(b.sent));
+    if (!freshTs(Number(b.ts)) || !(sent >= 0) || !(await codeSigned(env, code, `eventreport|${code}|${b.ts}|${id}|${b.sent}`, b.sig))) return fail(403, 'forbidden');
+    return internal('/event/report', { id, conf, code, sent });
+  }
+  return fail(404, 'not found');
 }
 
 // Zentraler Index: Feed, Likes, Kommentare, Aufrufe, Meldungen

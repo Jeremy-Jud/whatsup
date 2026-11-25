@@ -226,6 +226,18 @@
           <path d="M98 76 110 76 104 88 112 88 96 106 101 92 93 92Z"><animate attributeName="opacity" values="1;.15;1;1" keyTimes="0;.1;.2;1" dur="3.1s" repeatCount="indefinite"/></path>
         </g>`,
     },
+    // ---------- Event-Belohnungen: gibt es nur im jeweiligen Event und danach nie wieder ----------
+    xmashat: {
+      name: 'Weihnachtsmütze', locked: true, event: 'xmas2026',
+      svg: `<g transform="rotate(-16 60 26)">
+          <path d="M30 32C32 15 46 4 64 4C80 4 92 12 99 24C103 31 106 40 108 48C101 43 96 37 92 32Z" fill="#e5383b" stroke="#9b1c1f" stroke-width="1.6" stroke-linejoin="round"/>
+          <path d="M44 14C52 8 62 7 70 8" fill="none" stroke="#ff8a8a" stroke-width="2.4" stroke-linecap="round" opacity=".7"/>
+          <rect x="24" y="27" width="74" height="14" rx="7" fill="#fff" stroke="#d6d6d6" stroke-width="1.4"/>
+          <circle cx="109" cy="50" r="7.5" fill="#fff" stroke="#d6d6d6" stroke-width="1.4"/>
+        </g>
+        <g><animate attributeName="opacity" values="1;.25;1" dur="2.6s" repeatCount="indefinite"/>${spark(12, 70, 0.55, '#dbeafe')}${spark(108, 96, 0.5, '#fff')}</g>
+        <g><animate attributeName="opacity" values=".25;1;.25" dur="2.6s" repeatCount="indefinite"/>${spark(20, 104, 0.45, '#fff')}${spark(112, 74, 0.4, '#dbeafe')}</g>`,
+    },
   };
 
   // Banner für den Profil-Status (ebenfalls nur mit Code)

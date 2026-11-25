@@ -1444,3 +1444,14 @@ input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
 .gift-opt .banner-pill { max-width: 100%; }
 .gift-opt-ic { font-size: 28px; }
 .gift-opt-name { font-size: 11px; color: var(--muted); }
+/* Geschenk senden: Empfänger auswählen */
+.gift-step { margin-top: 6px; font-weight: 650; }
+.gift-tools { display: flex; align-items: center; gap: 8px; }
+.gift-tools .admin-search { flex: 1; }
+.gift-tools .link { white-space: nowrap; font-size: 12.5px; }
+.gift-users { max-height: 30vh; min-height: 120px; flex-shrink: 0; overflow-y: auto; }
+.gift-grid { flex-shrink: 0; }
+.gift-user { cursor: pointer; }
+.gift-user input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; flex-shrink: 0; pointer-events: none; }
+.gift-user.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.gift-count { font-size: 12.5px; }

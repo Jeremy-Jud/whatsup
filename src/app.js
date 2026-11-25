@@ -4521,19 +4521,67 @@
   }
   $('adminPayBtn').onclick = openAdminPay;
 
-  // Geschenk senden: Rahmen, Banner, Pro-Design oder ganz Pro an einen Code
+  // Geschenk senden: Rahmen, Banner, Pro-Design oder ganz Pro an ausgewählte Nutzer (oder alle)
   function openAdminGift(preset) {
     openModal((box) => {
       box.classList.add('admin-box');
       box.appendChild(el('h3', '', '🎁 Geschenk senden'));
-      box.appendChild(el('div', 'muted', 'Die Person bekommt ein Geschenk mit Konfetti, packt es aus und fordert es ein.'));
-      const inp = el('input', 'gift-code');
-      inp.placeholder = 'Code des Empfängers'; inp.maxLength = 6; inp.autocomplete = 'off'; inp.spellcheck = false;
-      inp.value = preset || '';
-      const who = el('div', 'muted gift-who');
-      const showWho = () => { const c = inp.value.trim().toUpperCase(); who.textContent = CODE_RE.test(c) ? (contacts[c] ? 'An ' + nameOf(c) : 'An den Code ' + c) : ''; };
-      inp.oninput = showWho;
-      showWho();
+      box.appendChild(el('div', 'muted', 'Wer es bekommt, sieht ein Geschenk mit Konfetti, packt es aus und fordert es ein.'));
+      // ---------- 1. Wer? ----------
+      const chosen = new Set(preset ? [preset] : []);
+      const userName = (c) => { const u = (users || []).find((x) => x.code === c); return u ? u.name : nameOf(c); };
+      let users = adminData ? adminData.users : null;
+      box.appendChild(el('div', 'label gift-step', '1. Wer bekommt es?'));
+      const tools = el('div', 'gift-tools');
+      const search = el('input', 'admin-search');
+      search.placeholder = 'Name oder Code suchen…'; search.autocomplete = 'off';
+      const all = el('button', 'link', 'Alle auswählen');
+      all.type = 'button';
+      tools.append(search, all);
+      const count = el('div', 'muted gift-count');
+      const ul = el('ul', 'members admin-list gift-users');
+      const shown = () => {
+        const q = search.value.trim().toLowerCase();
+        return (users || []).filter((u) => !q || u.name.toLowerCase().includes(q) || u.code.toLowerCase().includes(q));
+      };
+      const drawCount = () => {
+        count.textContent = chosen.size ? (chosen.size === 1 ? `An ${userName([...chosen][0])}` : `${chosen.size} Personen ausgewählt`) : 'Noch niemand ausgewählt';
+        const list = shown();
+        all.textContent = list.length && list.every((u) => chosen.has(u.code)) ? 'Keine auswählen' : (search.value.trim() ? 'Alle Treffer auswählen' : 'Alle auswählen');
+        sendBtn.textContent = chosen.size > 1 ? `Schenken (${chosen.size})` : 'Schenken';
+      };
+      const drawUsers = () => {
+        ul.replaceChildren();
+        if (!users) { ul.appendChild(el('li', 'muted', 'Nutzer werden geladen …')); return; }
+        const list = shown();
+        if (!list.length) ul.appendChild(el('li', 'muted', 'Niemand gefunden.'));
+        list.slice(0, 500).forEach((u) => {
+          const li = el('li', 'gift-user' + (chosen.has(u.code) ? ' on' : ''));
+          const cb = el('input');
+          cb.type = 'checkbox'; cb.checked = chosen.has(u.code); cb.tabIndex = -1;
+          const c = contacts[u.code];
+          const meta = el('div', 'fmeta');
+          meta.append(el('div', 'fname', u.name + (u.code === me.code ? ' (Du)' : '')), el('div', 'flast', `${u.code} · ${agoText(u.last)}`));
+          li.append(cb, avatarEl(u.name, u.code === me.code ? me.avatar : c && c.avatar, u.code), meta);
+          li.onclick = () => {
+            if (chosen.has(u.code)) chosen.delete(u.code); else chosen.add(u.code);
+            li.classList.toggle('on', chosen.has(u.code)); cb.checked = chosen.has(u.code);
+            drawCount();
+          };
+          ul.appendChild(li);
+        });
+        drawCount();
+      };
+      search.oninput = drawUsers;
+      all.onclick = () => {
+        const list = shown();
+        const every = list.length && list.every((u) => chosen.has(u.code));
+        list.forEach((u) => (every ? chosen.delete(u.code) : chosen.add(u.code)));
+        drawUsers();
+      };
+      box.append(tools, ul, count);
+      // ---------- 2. Was? ----------
+      box.appendChild(el('div', 'label gift-step', '2. Was verschenkst du?'));
       const KINDS = [['frame', 'Rahmen'], ['banner', 'Banner'], ['design', 'Design'], ['pro', '⭐ Pro']];
       let kind = 'frame', item = null;
       const seg = el('div', 'segmented gift-kinds');
@@ -4542,11 +4590,11 @@
         : kind === 'banner' ? Object.keys(BANNERS).map((b) => [b, BANNERS[b].name])
         : kind === 'design' ? DESIGNS.filter((d) => d[2] === 'pro').map((d) => [d[0], d[1]])
         : [['pro', 'WhatsUp Pro']]);
-      const draw = () => {
+      const drawItems = () => {
         seg.replaceChildren(...KINDS.map(([k, label]) => {
           const b = el('button', k === kind ? 'active' : '', label);
           b.type = 'button';
-          b.onclick = () => { kind = k; item = k === 'pro' ? 'pro' : null; draw(); };
+          b.onclick = () => { kind = k; item = k === 'pro' ? 'pro' : null; drawItems(); };
           return b;
         }));
         grid.replaceChildren(...items().map(([id, name]) => {
@@ -4556,23 +4604,34 @@
           else if (kind === 'banner') { const p = el('span', 'banner-pill' + (BANNERS[id].anim ? ' anim' : ''), name); p.style.background = BANNERS[id].bg; b.appendChild(p); }
           else b.appendChild(el('span', 'gift-opt-ic', kind === 'pro' ? '⭐' : '🎨'));
           if (kind !== 'banner') b.appendChild(el('span', 'gift-opt-name', name));
-          b.onclick = () => { item = id; draw(); };
+          b.onclick = () => { item = id; drawItems(); };
           return b;
         }));
       };
-      draw();
+      box.append(seg, grid);
+      // ---------- Senden ----------
       const err = el('div', 'status err');
-      box.append(inp, who, seg, grid, err, buttons(['Abbrechen', 'ghost', closeModal], ['Schenken', 'primary', async () => {
-        const code = inp.value.trim().toUpperCase();
-        if (!CODE_RE.test(code)) { err.textContent = 'Gib einen gültigen Code ein (6 Zeichen).'; return; }
+      const acts = buttons(['Abbrechen', 'ghost', closeModal], ['Schenken', 'primary', async () => {
+        err.textContent = '';
+        if (!chosen.size) { err.textContent = 'Wähle aus, wer das Geschenk bekommt.'; return; }
         if (!item) { err.textContent = 'Wähle aus, was du verschenken willst.'; return; }
+        const targets = [...chosen];
+        if (targets.length > 10 && !confirm(`Wirklich an ${targets.length} Personen verschenken?`)) return;
+        sendBtn.disabled = true;
         try {
-          await relay.pro.gift(code, kind, item);
-          sendTo(code, { type: 'giftping' }); // ist die Person online, sieht sie es sofort
+          const r = await relay.pro.gift(targets, kind, item);
+          targets.forEach((c) => sendTo(c, { type: 'giftping' })); // wer online ist, sieht es sofort
           closeModal();
-          toast(`🎁 Geschenk an ${nameOf(code)} gesendet`, true);
-        } catch { err.textContent = 'Das hat nicht geklappt. Bitte später nochmal versuchen.'; }
-      }]));
+          const n = r && typeof r.sent === 'number' ? r.sent : targets.length;
+          toast(targets.length === 1 ? `🎁 Geschenk an ${userName(targets[0])} gesendet` : `🎁 Geschenk an ${n} Personen gesendet`, true);
+        } catch { err.textContent = 'Das hat nicht geklappt. Bitte später nochmal versuchen.'; sendBtn.disabled = false; }
+      }]);
+      const sendBtn = acts.querySelector('.primary');
+      box.append(err, acts);
+      drawItems();
+      drawUsers();
+      // Nutzerliste frisch vom Server
+      relay.adminUsers().then((d) => { adminData = d; users = d.users; drawUsers(); }).catch(() => { if (!users) ul.replaceChildren(el('li', 'muted', 'Nutzerliste nicht erreichbar.')); });
     });
   }
   $('adminGiftBtn').onclick = () => openAdminGift();
@@ -8701,7 +8760,7 @@
       purchases: () => signedPro('purchases', (ts) => `adminpurchases|${me.code}|${ts}`),
       decide: (target, action) => signedPro('decide', (ts) => `admindecide|${me.code}|${ts}|${target}|${action}`, { target, action }),
       setPay: (pay) => { const s = JSON.stringify(pay); return signedPro('pay', (ts) => `adminpay|${me.code}|${ts}|${s}`, { pay: s }); },
-      gift: (target, kind, item) => signedPro('gift', (ts) => `admingift|${me.code}|${ts}|${target}|${kind}|${item}`, { target, kind, item, from: me.name }),
+      gift: (targets, kind, item) => { const t = [].concat(targets); return signedPro('gift', (ts) => `admingift|${me.code}|${ts}|${t.join(',')}|${kind}|${item}`, { targets: t, kind, item, from: me.name }); },
       claim: (id) => signedPro('claim', (ts) => `proclaim|${me.code}|${ts}|${id}`, { id }),
     };
     // Weltweite Zahlen: { counts: { id: Anzahl }, players }. Höchstens alle 5 Minuten neu laden.

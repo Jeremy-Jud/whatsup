@@ -516,6 +516,9 @@
       case 'mact': // Reaktion oder „für alle löschen“
         receiveAction(code, data);
         break;
+      case 'giftping': // Ein Admin hat dir etwas geschenkt: gleich nachschauen
+        pro.refresh();
+        break;
       case 'firesave': // Streak-Retter des Freundes (WhatsUp Pro)
         fire.remoteRescue(code, data.day);
         break;
@@ -1760,9 +1763,126 @@
       if (!relay.ready()) return;
       try { setAdmin(await relay.isAdmin(true)); adminChecked = true; } catch { /* offline: so lassen */ }
     }
+    // ---------- Geschenke vom Admin (Rahmen, Banner, Designs, Pro) ----------
+    let owned = new Set(store.load('giftOwned', []));   // eingeforderte Geschenke, z. B. 'frame:orbit'
+    let giftQueue = [], giftShowing = false, giftT = 0;
+    const hasDesign = (id) => isPro() || owned.has('design:' + id);
+    function setOwned(list) {
+      const next = new Set(list.filter((k) => typeof k === 'string'));
+      if ([...next].sort().join() === [...owned].sort().join()) return;
+      owned = next;
+      store.save('giftOwned', [...owned]);
+      scheduleRender();
+      if (view === 'viewSettings') renderProfAvatar();
+    }
+    function queueGifts(list) {
+      list.forEach((g) => { if (g && g.id && !giftQueue.some((x) => x.id === g.id)) giftQueue.push(g); });
+      showNextGift();
+    }
+    function showNextGift() {
+      clearTimeout(giftT);
+      if (giftShowing || !giftQueue.length) return;
+      // nicht mitten in etwas anderes platzen
+      if (!$('modal').classList.contains('hidden') || view === 'viewSetup' || calls.active() || document.hidden) { giftT = setTimeout(showNextGift, 4000); return; }
+      giftShowing = true;
+      openGift(giftQueue.shift());
+    }
+    // Was ist das Geschenk? Name, Art, Beschreibung, Vorschau
+    function giftInfo(g) {
+      if (g.kind === 'frame' && FRAMES[g.item]) return { name: FRAMES[g.item].name, type: 'Profilrahmen', desc: FRAMES[g.item].pro ? 'Ein animierter Rahmen für dein Profilbild.' : 'Ein exklusiver Rahmen für dein Profilbild.', preview: () => avatarEl(me.name, me.avatar, me.code, 'xl', null, g.item) };
+      if (g.kind === 'banner' && BANNERS[g.item]) return { name: BANNERS[g.item].name, type: 'Status-Banner', desc: BANNERS[g.item].anim ? 'Ein Banner um deinen Status, dessen Farben fließen.' : 'Ein farbiges Banner um deinen Status.', preview: () => bannerEl(me.status || me.name, g.item) };
+      const d = DESIGNS.find((x) => x[0] === g.item);
+      if (g.kind === 'design' && d) {
+        return { name: d[1], type: 'Design', desc: 'Ein bewegtes Design für die ganze App.', preview: () => {
+          const b = el('div', 'design-opt gift-design active');
+          b.dataset.design = g.item;
+          b.append(el('span', 'dz-scene'), el('span', 'dz-b1'), el('span', 'dz-b2'), el('span', 'dz-name', d[1]));
+          if (window.ThemeFx) window.ThemeFx.preview(b, g.item);
+          return b;
+        } };
+      }
+      if (g.kind === 'pro') return { name: 'WhatsUp Pro', type: 'Alles freigeschaltet', desc: 'Alle Pro-Extras: ⭐-Abzeichen, exklusive Designs, alle Rahmen und Banner, neue Mini-Spiele und der Streak-Retter.', preview: () => el('div', 'gift-pro-star', '⭐') };
+      return { name: 'Ein Geschenk', type: 'Geschenk', desc: 'Aktualisiere WhatsUp, um dieses Geschenk zu sehen.', preview: null };
+    }
+    function where(g) {
+      return g.kind === 'frame' ? 'Auswählen unter Du → Personalisieren → Profilrahmen.'
+        : g.kind === 'banner' ? 'Auswählen unter Du → Personalisieren → Banner.'
+        : g.kind === 'design' ? 'Auswählen unter Du → Personalisieren → Design.' : '';
+    }
+    // Konfetti über allem
+    function confetti() {
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      const c = document.createElement('canvas');
+      c.className = 'confetti';
+      document.body.appendChild(c);
+      const dpr = Math.min(2, window.devicePixelRatio || 1), W = window.innerWidth, H = window.innerHeight;
+      c.width = W * dpr; c.height = H * dpr;
+      const g = c.getContext('2d');
+      g.scale(dpr, dpr);
+      const cols = ['#ff5b7f', '#ffd34d', '#4ade80', '#38bdf8', '#a855f7', '#ff8a3d'];
+      const ps = Array.from({ length: 170 }, () => ({
+        x: W / 2 + (Math.random() - 0.5) * 80, y: H * 0.42, vx: (Math.random() - 0.5) * 16, vy: -Math.random() * 15 - 5,
+        r: Math.random() * 6 + 5, a: Math.random() * 6.3, va: (Math.random() - 0.5) * 0.35, col: cols[(Math.random() * cols.length) | 0],
+      }));
+      const t0 = performance.now();
+      const step = (t) => {
+        const k = (t - t0) / 1000;
+        g.clearRect(0, 0, W, H);
+        for (const p of ps) {
+          p.vy += 0.32; p.vx *= 0.99; p.x += p.vx; p.y += p.vy; p.a += p.va;
+          g.save(); g.translate(p.x, p.y); g.rotate(p.a);
+          g.globalAlpha = Math.max(0, Math.min(1, 3.2 - k));
+          g.fillStyle = p.col; g.fillRect(-p.r / 2, -p.r / 4, p.r, p.r / 2);
+          g.restore();
+        }
+        if (k < 3.2) requestAnimationFrame(step); else c.remove();
+      };
+      requestAnimationFrame(step);
+    }
+    function openGift(g) {
+      const info = giftInfo(g), from = g.from || 'Admin';
+      openModal((box) => {
+        box.classList.add('gift-box');
+        const stage = el('div', 'gift-stage');
+        const present = el('button', 'gift-present', '🎁');
+        present.type = 'button';
+        present.title = 'Auspacken';
+        stage.append(el('div', 'gift-title', 'Du hast ein Geschenk bekommen!'), el('div', 'gift-from', `von ${from}`), present, el('div', 'muted', 'Tippe auf das Geschenk, um es auszupacken'));
+        box.appendChild(stage);
+        confetti();
+        present.onclick = () => {
+          present.disabled = true;
+          present.classList.add('opening');
+          setTimeout(() => {
+            stage.replaceChildren();
+            const card = el('div', 'gift-item');
+            card.append(el('div', 'gift-type', info.type));
+            if (info.preview) { const p = el('div', 'gift-preview'); p.appendChild(info.preview()); card.appendChild(p); }
+            card.append(el('h3', '', info.name), el('div', 'muted', info.desc), el('div', 'gift-from-small', `🎁 Geschenk von ${from}`));
+            stage.appendChild(card);
+            confetti();
+            const err = el('div', 'status err');
+            const acts = buttons(['Einfordern', 'primary', async () => {
+              const b = acts.querySelector('.primary');
+              b.disabled = true;
+              try {
+                await relay.pro.claim(g.id);
+                if (g.kind === 'pro') { setMine('paid'); refresh(); }
+                else { owned.add(g.kind + ':' + g.item); store.save('giftOwned', [...owned]); scheduleRender(); if (view === 'viewSettings') renderProfAvatar(); }
+                closeModal();
+                toast(`🎁 ${info.name} gehört jetzt dir! ${where(g)}`, true);
+              } catch { err.textContent = 'Das hat nicht geklappt. Versuch es gleich nochmal.'; b.disabled = false; }
+            }]);
+            stage.append(err, acts);
+          }, 700);
+        };
+        // Zu ohne Einfordern: kommt beim nächsten Abgleich wieder
+        onModalClose = () => { giftShowing = false; giftT = setTimeout(showNextGift, 900); };
+      });
+    }
     // Pro entzogen: Pro-Design, -Rahmen und -Banner zurücksetzen
     function lost() {
-      if (isProDesign(settings.design)) { settings.design = 'classic'; saveSettings(); applyTheme(); renderTheme(); }
+      if (isProDesign(settings.design) && !hasDesign(settings.design)) { settings.design = 'classic'; saveSettings(); applyTheme(); renderTheme(); }
       let changed = false;
       if (me.frame && frameLocked(me.frame)) { me.frame = null; changed = true; }
       if (me.banner && bannerLocked(me.banner)) { me.banner = null; changed = true; }
@@ -1779,6 +1899,8 @@
         if (d.price) price = d.price;
         payInfo = d.pay || null;
         cardOn = !!d.card;
+        if (Array.isArray(d.owned)) setOwned(d.owned);
+        if (Array.isArray(d.gifts)) queueGifts(d.gifts);
         loaded = true;
         setMine(d.status);
         renderRow();
@@ -1955,7 +2077,7 @@
         refresh();
       });
     }
-    return { isPro, has, star, open, announce, setAdmin, checkAdmin, refresh, refreshOthers, refreshOthersSoon, renderRow, status: () => mine.status };
+    return { isPro, has, star, open, announce, setAdmin, checkAdmin, hasDesign, ownedList: () => [...owned], isAdmin: () => admin, refresh, refreshOthers, refreshOthersSoon, renderRow, status: () => mine.status };
   })();
 
   // Einlöse-Codes (Liste mit allen Codes: CODES.md im Repo). Groß/klein, Leerzeichen und Bindestriche egal.
@@ -1983,6 +2105,8 @@
       Object.keys(FRAMES).forEach((f) => { if (FRAMES[f].locked && !FRAMES[f].challenge) r.add('frame:' + f); });
       Object.keys(BANNERS).forEach((b) => { if (!BANNERS[b].challenge) r.add('banner:' + b); });
     }
+    // Geschenke vom Admin
+    pro.ownedList().forEach((k) => r.add(k));
     return r;
   };
   // Neue Zahl geschaffter Challenges übernehmen; neu freigeschaltete Belohnungen melden
@@ -3926,6 +4050,7 @@
       }
       box.appendChild(reels.profileSection(code, shownName));
       const btns = [];
+      if (!mine && pro.isAdmin()) btns.push(['🎁 Schenken', 'ghost', () => openAdminGift(code)]);
       if (!mine && c && c.friend) btns.push(['Chat öffnen', 'ghost', () => { closeModal(); openChat('u:' + code); }]);
       else if (!mine && !blocked.includes(code)) btns.push(['Als Freund hinzufügen', 'ghost', () => {
         closeModal();
@@ -4395,6 +4520,62 @@
     });
   }
   $('adminPayBtn').onclick = openAdminPay;
+
+  // Geschenk senden: Rahmen, Banner, Pro-Design oder ganz Pro an einen Code
+  function openAdminGift(preset) {
+    openModal((box) => {
+      box.classList.add('admin-box');
+      box.appendChild(el('h3', '', '🎁 Geschenk senden'));
+      box.appendChild(el('div', 'muted', 'Die Person bekommt ein Geschenk mit Konfetti, packt es aus und fordert es ein.'));
+      const inp = el('input', 'gift-code');
+      inp.placeholder = 'Code des Empfängers'; inp.maxLength = 6; inp.autocomplete = 'off'; inp.spellcheck = false;
+      inp.value = preset || '';
+      const who = el('div', 'muted gift-who');
+      const showWho = () => { const c = inp.value.trim().toUpperCase(); who.textContent = CODE_RE.test(c) ? (contacts[c] ? 'An ' + nameOf(c) : 'An den Code ' + c) : ''; };
+      inp.oninput = showWho;
+      showWho();
+      const KINDS = [['frame', 'Rahmen'], ['banner', 'Banner'], ['design', 'Design'], ['pro', '⭐ Pro']];
+      let kind = 'frame', item = null;
+      const seg = el('div', 'segmented gift-kinds');
+      const grid = el('div', 'gift-grid');
+      const items = () => (kind === 'frame' ? Object.keys(FRAMES).filter((f) => FRAMES[f].locked).map((f) => [f, FRAMES[f].name])
+        : kind === 'banner' ? Object.keys(BANNERS).map((b) => [b, BANNERS[b].name])
+        : kind === 'design' ? DESIGNS.filter((d) => d[2] === 'pro').map((d) => [d[0], d[1]])
+        : [['pro', 'WhatsUp Pro']]);
+      const draw = () => {
+        seg.replaceChildren(...KINDS.map(([k, label]) => {
+          const b = el('button', k === kind ? 'active' : '', label);
+          b.type = 'button';
+          b.onclick = () => { kind = k; item = k === 'pro' ? 'pro' : null; draw(); };
+          return b;
+        }));
+        grid.replaceChildren(...items().map(([id, name]) => {
+          const b = el('button', 'gift-opt' + (id === item ? ' on' : ''));
+          b.type = 'button';
+          if (kind === 'frame') b.appendChild(avatarEl(name, null, id, 'md', null, id));
+          else if (kind === 'banner') { const p = el('span', 'banner-pill' + (BANNERS[id].anim ? ' anim' : ''), name); p.style.background = BANNERS[id].bg; b.appendChild(p); }
+          else b.appendChild(el('span', 'gift-opt-ic', kind === 'pro' ? '⭐' : '🎨'));
+          if (kind !== 'banner') b.appendChild(el('span', 'gift-opt-name', name));
+          b.onclick = () => { item = id; draw(); };
+          return b;
+        }));
+      };
+      draw();
+      const err = el('div', 'status err');
+      box.append(inp, who, seg, grid, err, buttons(['Abbrechen', 'ghost', closeModal], ['Schenken', 'primary', async () => {
+        const code = inp.value.trim().toUpperCase();
+        if (!CODE_RE.test(code)) { err.textContent = 'Gib einen gültigen Code ein (6 Zeichen).'; return; }
+        if (!item) { err.textContent = 'Wähle aus, was du verschenken willst.'; return; }
+        try {
+          await relay.pro.gift(code, kind, item);
+          sendTo(code, { type: 'giftping' }); // ist die Person online, sieht sie es sofort
+          closeModal();
+          toast(`🎁 Geschenk an ${nameOf(code)} gesendet`, true);
+        } catch { err.textContent = 'Das hat nicht geklappt. Bitte später nochmal versuchen.'; }
+      }]));
+    });
+  }
+  $('adminGiftBtn').onclick = () => openAdminGift();
   function openAdminUsers() {
     openModal((box) => {
       box.appendChild(el('h3', '', '👥 Nutzer von WhatsUp'));
@@ -4608,7 +4789,7 @@
   if (!DESIGNS.some(([id]) => id === settings.design)) settings.design = 'classic';
   function applyTheme() {
     const root = document.documentElement;
-    if (isProDesign(settings.design) && !pro.isPro()) settings.design = 'classic';
+    if (isProDesign(settings.design) && !pro.hasDesign(settings.design)) settings.design = 'classic';
     if (settings.theme === 'system') root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', settings.theme);
     if (settings.design === 'classic') root.removeAttribute('data-design');
@@ -4634,7 +4815,7 @@
     if (tag === 'pro') b.append(el('span', 'dz-pro', '⭐ Pro'));
     if (window.ThemeFx) window.ThemeFx.preview(b, id);   // Mini-Szene (nur Designs mit bewegtem Hintergrund)
     b.onclick = () => {
-      if (tag === 'pro' && !pro.isPro()) { pro.open(); return; }
+      if (tag === 'pro' && !pro.hasDesign(id)) { pro.open(); return; }
       settings.design = id; saveSettings(); applyTheme(); renderTheme(); sendPrefs();
     };
     $('designGrid').append(b);
@@ -8520,6 +8701,8 @@
       purchases: () => signedPro('purchases', (ts) => `adminpurchases|${me.code}|${ts}`),
       decide: (target, action) => signedPro('decide', (ts) => `admindecide|${me.code}|${ts}|${target}|${action}`, { target, action }),
       setPay: (pay) => { const s = JSON.stringify(pay); return signedPro('pay', (ts) => `adminpay|${me.code}|${ts}|${s}`, { pay: s }); },
+      gift: (target, kind, item) => signedPro('gift', (ts) => `admingift|${me.code}|${ts}|${target}|${kind}|${item}`, { target, kind, item, from: me.name }),
+      claim: (id) => signedPro('claim', (ts) => `proclaim|${me.code}|${ts}|${id}`, { id }),
     };
     // Weltweite Zahlen: { counts: { id: Anzahl }, players }. Höchstens alle 5 Minuten neu laden.
     let achStatsCache = store.load('achStats', null);
@@ -8586,7 +8769,7 @@
     // Abholen: beim Start, jede Minute, beim Zurückkehren in die App und wenn das Netz wieder da ist
     setInterval(() => poll(), 60000);
     // Wartet eine Pro-Zahlung auf Bestätigung: jede Minute nachschauen; ⭐ der Freunde alle 30 Minuten
-    setInterval(() => { if (pro.status() === 'pending') pro.refresh(); }, 60000);
+    setInterval(() => pro.refresh(), 2 * 60000); // Pro-Status und neue Geschenke
     setInterval(() => pro.refreshOthers(), 30 * 60000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
     if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', (e) => { if (e.data && e.data.type === 'relay-poll') poll(); });

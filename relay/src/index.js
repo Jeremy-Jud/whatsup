@@ -347,6 +347,8 @@ export class AchStats {
     // WhatsUp Pro: Kaufanfragen (status: pending | paid | rejected | revoked) und Einstellungen (Zahlungsarten)
     this.sql.exec('CREATE TABLE IF NOT EXISTS purchases (code TEXT PRIMARY KEY, name TEXT, status TEXT, requested INTEGER, decided INTEGER)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)');
+    // Geschenke vom Admin: kind = frame | banner | design | pro, claimed = Zeitpunkt des Einforderns (0 = offen)
+    this.sql.exec('CREATE TABLE IF NOT EXISTS gifts (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, kind TEXT, item TEXT, fromName TEXT, created INTEGER, claimed INTEGER DEFAULT 0)');
     this.cache = null; // { at, body }
     this.lbCache = {};
   }
@@ -364,7 +366,35 @@ export class AchStats {
     }
     if (!CODE_RE.test(b.code || b.target || '')) return fail(400, 'bad code');
     // Eigener Status, dazu Preis und wie man bezahlt (nur für angemeldete WhatsUp-Nutzer)
-    if (path === '/pro/status') { const r = row(b.code); return json({ status: r ? r.status : 'none', price: PRO_PRICE, pay: this.payInfo(), card: !!b.card }); }
+    if (path === '/pro/status') {
+      const r = row(b.code);
+      const gifts = this.sql.exec('SELECT id, kind, item, fromName, created, claimed FROM gifts WHERE code = ? ORDER BY id', b.code).toArray();
+      return json({
+        status: r ? r.status : 'none', price: PRO_PRICE, pay: this.payInfo(), card: !!b.card,
+        gifts: gifts.filter((g) => !g.claimed).map((g) => ({ id: g.id, kind: g.kind, item: g.item, from: g.fromName, created: g.created })),
+        owned: gifts.filter((g) => g.claimed && g.kind !== 'pro').map((g) => g.kind + ':' + g.item),
+      });
+    }
+    // Admin verschenkt etwas (Prüfung im Worker)
+    if (path === '/pro/gift') {
+      if (this.sql.exec('SELECT COUNT(*) AS n FROM gifts WHERE code = ? AND claimed = 0', b.target).toArray()[0].n >= 50) return fail(429, 'too many gifts');
+      this.sql.exec('INSERT INTO gifts (code, kind, item, fromName, created) VALUES (?, ?, ?, ?, ?)', b.target, b.kind, b.item, b.from || 'Admin', now);
+      return json({ ok: true });
+    }
+    // Geschenk einfordern (Pro-Geschenk schaltet Pro frei)
+    if (path === '/pro/claim') {
+      const g = this.sql.exec('SELECT id, kind, claimed FROM gifts WHERE id = ? AND code = ?', b.id, b.code).toArray()[0];
+      if (!g) return fail(404, 'not found');
+      if (!g.claimed) {
+        this.sql.exec('UPDATE gifts SET claimed = ? WHERE id = ?', now, g.id);
+        if (g.kind === 'pro') {
+          const name = (this.sql.exec('SELECT name FROM users WHERE code = ?', b.code).toArray()[0] || {}).name || '';
+          this.sql.exec(`INSERT INTO purchases (code, name, status, requested, decided) VALUES (?, ?, 'paid', ?, ?)
+            ON CONFLICT(code) DO UPDATE SET status = 'paid', decided = excluded.decided`, b.code, name, now, now);
+        }
+      }
+      return json({ ok: true, kind: g.kind });
+    }
     if (path === '/pro/request') {
       const r = row(b.code);
       if (r && r.status === 'paid') return json({ status: 'paid' });
@@ -633,14 +663,25 @@ async function proRoute(req, env, parts) {
     }
     return what === 'status' ? internal('/pro/status', { code, card }) : internal('/pro/request', { code, name: textOf(b.name, 24) });
   }
-  // Admin: Einkäufe ansehen, bestätigen/ablehnen/entziehen, Zahlungsarten setzen
+  // Geschenk einfordern (signiert vom Empfänger)
+  if (what === 'claim') {
+    const id = Math.floor(Number(b.id));
+    if (!(id > 0) || !(await codeSigned(env, code, `proclaim|${code}|${b.ts}|${id}`, b.sig))) return fail(403, 'forbidden');
+    return internal('/pro/claim', { code, id });
+  }
+  // Admin: Einkäufe ansehen, bestätigen/ablehnen/entziehen, Zahlungsarten setzen, Geschenke senden
   if (!admins(env).includes(code)) return fail(403, 'forbidden');
   const target = String(b.target || '').toUpperCase(), action = String(b.action || '');
   const pay = typeof b.pay === 'string' ? b.pay.slice(0, 2000) : '';
-  const text = { purchases: `adminpurchases|${code}|${b.ts}`, decide: `admindecide|${code}|${b.ts}|${target}|${action}`, pay: `adminpay|${code}|${b.ts}|${pay}` }[what];
+  const kind = String(b.kind || ''), item = String(b.item || '');
+  const text = { purchases: `adminpurchases|${code}|${b.ts}`, decide: `admindecide|${code}|${b.ts}|${target}|${action}`, pay: `adminpay|${code}|${b.ts}|${pay}`, gift: `admingift|${code}|${b.ts}|${target}|${kind}|${item}` }[what];
   if (!text) return fail(404, 'not found');
   if (!(await codeSigned(env, code, text, b.sig))) return fail(403, 'forbidden');
   if (what === 'purchases') return internal('/pro/purchases');
+  if (what === 'gift') {
+    if (!CODE_RE.test(target) || !['frame', 'banner', 'design', 'pro'].includes(kind) || !/^[a-z0-9-]{1,30}$/.test(item)) return fail(400, 'bad request');
+    return internal('/pro/gift', { target, kind, item, from: textOf(b.from, 24) || 'Admin' });
+  }
   if (what === 'decide') {
     if (!CODE_RE.test(target) || !['confirm', 'reject', 'revoke'].includes(action)) return fail(400, 'bad request');
     return internal('/pro/decide', { target, action });

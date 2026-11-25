@@ -617,7 +617,9 @@ async function proRoute(req, env, parts) {
   // Wer von diesen Codes ist Pro? (öffentlich, für das ⭐ neben dem Namen)
   if (what === 'list') {
     const codes = (Array.isArray(b.codes) ? b.codes : []).map((c) => String(c).toUpperCase()).filter((c) => CODE_RE.test(c)).slice(0, 500);
-    return internal('/pro/list', { codes });
+    const d = await (await internal('/pro/list', { codes })).json().catch(() => ({}));
+    // Admins haben Pro immer
+    return json({ pro: [...new Set([...(d.pro || []), ...admins(env).filter((c) => codes.includes(c))])] });
   }
   const code = String(b.code || '').toUpperCase();
   if (!freshTs(Number(b.ts))) return fail(403, 'forbidden');

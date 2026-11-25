@@ -1720,7 +1720,9 @@
     let mine = store.load('pro', { status: 'none' });   // none | pending | paid | rejected | revoked
     let others = store.load('proOthers', {});           // Code -> 1: Freunde mit Pro (für das ⭐)
     let price = 2;
-    const isPro = () => mine.status === 'paid';
+    // Admins haben Pro immer (wer Admin ist, sagt der Server)
+    let admin = store.load('proAdmin', false), adminChecked = false;
+    const isPro = () => mine.status === 'paid' || admin;
     const has = (code) => (me && code === me.code ? isPro() : !!others[code]);
     const PERKS = [
       ['⭐', 'Pro-Abzeichen', 'Ein Stern neben deinem Namen, den alle sehen'],
@@ -1742,6 +1744,21 @@
       renderRow(); scheduleRender();
       if (view === 'viewSettings') renderProfAvatar(); // Rahmen und Banner sofort (ent)sperren
       if (drawOpen) drawOpen();
+    }
+    function setAdmin(a) {
+      a = !!a;
+      if (a === admin) return;
+      const was = isPro();
+      admin = a;
+      store.save('proAdmin', a);
+      if (was && !isPro()) lost();
+      if (!was && isPro()) broadcastProfile();
+      renderRow(); scheduleRender();
+      if (view === 'viewSettings') renderProfAvatar();
+    }
+    async function checkAdmin() {
+      if (!relay.ready()) return;
+      try { setAdmin(await relay.isAdmin(true)); adminChecked = true; } catch { /* offline: so lassen */ }
     }
     // Pro entzogen: Pro-Design, -Rahmen und -Banner zurücksetzen
     function lost() {
@@ -1791,7 +1808,8 @@
     function renderRow() {
       const sub = $('proSub');
       if (!sub) return;
-      sub.textContent = isPro() ? '✓ Aktiv · danke für deine Unterstützung!'
+      sub.textContent = admin && mine.status !== 'paid' ? '✓ Aktiv (als Admin)'
+        : isPro() ? '✓ Aktiv · danke für deine Unterstützung!'
         : mine.status === 'pending' ? '⏳ Deine Zahlung wird geprüft'
         : SOON ? 'Demnächst: exklusive Designs, Rahmen, Spiele und mehr'
         : `Für ${price} CHF: exklusive Designs, Rahmen, Spiele und mehr`;
@@ -1828,8 +1846,10 @@
       });
     }
     // Einmal nach dem Update: Hinweis, dass Pro bald kommt
-    function announce() {
+    function announce(tries = 0) {
       if (!SOON || isPro() || store.load('proTeaserShown', false)) return;
+      // erst wissen, ob man Admin ist (Admins haben Pro schon)
+      if (relay.enabled() && !adminChecked && tries < 6) { setTimeout(() => announce(tries + 1), 5000); return; }
       if (!$('modal').classList.contains('hidden')) { setTimeout(announce, 5000); return; }
       store.save('proTeaserShown', true);
       teaser(true);
@@ -1935,7 +1955,7 @@
         refresh();
       });
     }
-    return { isPro, has, star, open, announce, refresh, refreshOthers, refreshOthersSoon, renderRow, status: () => mine.status };
+    return { isPro, has, star, open, announce, setAdmin, checkAdmin, refresh, refreshOthers, refreshOthersSoon, renderRow, status: () => mine.status };
   })();
 
   // Einlöse-Codes (Liste mit allen Codes: CODES.md im Repo). Groß/klein, Leerzeichen und Bindestriche egal.
@@ -4211,7 +4231,9 @@
     return new Date(ts).toLocaleDateString('de-DE');
   };
   async function refreshAdmin() {
-    if (!relay.ready() || !(await relay.isAdmin())) { $('adminSection').classList.add('hidden'); return; }
+    let isAdm = false;
+    if (relay.ready()) { try { isAdm = await relay.isAdmin(true); pro.setAdmin(isAdm); } catch { isAdm = false; } }
+    if (!isAdm) { $('adminSection').classList.add('hidden'); return; }
     $('adminSection').classList.remove('hidden');
     $('adminCount').textContent = 'wird geladen…';
     loadPurchases().catch(() => { $('adminPurchCount').textContent = 'nicht erreichbar'; });
@@ -8473,8 +8495,9 @@
       const ts = Date.now();
       return post('/v1/admin/users', { code: me.code, ts, sig: await sign(`adminusers|${me.code}|${ts}`) });
     }
-    async function isAdmin() {
-      try { return !!(await (await fetch(`${url()}/v1/isadmin/${me.code}`)).json()).admin; } catch { return false; }
+    // strict: Fehler weitergeben statt „kein Admin“ (damit Pro bei Netzproblemen nicht verloren geht)
+    async function isAdmin(strict) {
+      try { return !!(await (await fetch(`${url()}/v1/isadmin/${me.code}`)).json()).admin; } catch (e) { if (strict) throw e; return false; }
     }
     // TURN-Zugang für Anrufe (nur wenn auf dem Server eingerichtet). Signiert, damit nur WhatsUp-Nutzer ihn bekommen.
     async function ice() {
@@ -8557,7 +8580,7 @@
       reportAchievements();
       setTimeout(reportSeen, 3000); // nach dem Start, wenn die Version bekannt ist
       setTimeout(() => games.reportProgress(), 6000); // Challenge-Fortschritt (Nachrichten, Streak)
-      setTimeout(() => { pro.refresh(); pro.refreshOthers(); }, 2000); // WhatsUp Pro: eigener Status und ⭐ der Freunde
+      setTimeout(() => { pro.checkAdmin(); pro.refresh(); pro.refreshOthers(); }, 2000); // WhatsUp Pro: eigener Status und ⭐ der Freunde
     }
 
     // Abholen: beim Start, jede Minute, beim Zurückkehren in die App und wenn das Netz wieder da ist

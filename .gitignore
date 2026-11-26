@@ -3,5 +3,7 @@ dist/
 *.log
 dist-test/
 dist-web/
+dist-studio/
+dist-web-studio/
 
 relay/.wrangler/

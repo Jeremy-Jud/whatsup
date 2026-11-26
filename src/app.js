@@ -323,7 +323,9 @@
   const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => CODE_CHARS[b % CODE_CHARS.length]).join('');
   const peerIdOf = (code) => ID_PREFIX + code.toLowerCase();
   const codeOf = (peerId) => peerId.slice(ID_PREFIX.length).toUpperCase();
-  const isOnline = (code) => !!(conns[code] && conns[code].open);
+  // Online = Verbindung offen UND (bei neuen Versionen) in den letzten Sekunden ein Lebenszeichen
+  const connState = (conn) => conn && { open: conn.open, hb: conn.wuHb, rx: conn.wuRx, ping: conn.wuPing };
+  const isOnline = (code) => LIB.connAlive(connState(conns[code]), Date.now());
 
   function wantedCodes() {
     const s = new Set(friendCodes());
@@ -357,10 +359,21 @@
     } catch {}
   }
 
+  // Fester Token pro Fenster/Tab: Ein neuer Peer (z. B. nach Neuladen oder Fehler) darf damit die eigene ID
+  // sofort wieder übernehmen. Mit einem neuen Zufalls-Token meldet der Server „ID vergeben“, bis er die alte,
+  // tote Verbindung selbst bemerkt – das dauerte bis zu einer Minute.
+  const peerToken = (() => {
+    try {
+      let t = sessionStorage.getItem('wuPeerToken');
+      if (!t) { t = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => (b % 36).toString(36)).join(''); sessionStorage.setItem('wuPeerToken', t); }
+      return t;
+    } catch { return undefined; } // PeerJS nimmt dann einen eigenen
+  })();
+
   function startPeer() {
     clearTimeout(restartTimer);
     const old = peer;
-    const p = (peer = new Peer(peerIdOf(me.code), { debug: 0, config: { iceServers } }));
+    const p = (peer = new Peer(peerIdOf(me.code), { debug: 0, config: { iceServers }, ...(peerToken ? { token: peerToken } : {}) }));
     if (old) { try { old.destroy(); } catch {} }
     // Ereignisse eines alten, ersetzten Peers ignorieren
     p.on('open', () => {
@@ -416,7 +429,7 @@
 
   function connectTo(code) {
     if (!peer || !peer.open || code === me.code || isOnline(code) || blocked.includes(code)) return;
-    if (connecting[code] && Date.now() - connecting[code] < 15000) return;
+    if (connecting[code] && Date.now() - connecting[code] < 10000) return;
     connecting[code] = Date.now();
     setupConn(peer.connect(peerIdOf(code), { reliable: true }), true);
   }
@@ -432,17 +445,104 @@
       // (z. B. iPhone im Hintergrund, PC neu gestartet) – dann würde alles dort verloren gehen.
       // Die alte bleibt offen: Was darüber noch ankommt, wird weiter verarbeitet.
       conns[code] = conn;
+      conn.wuRx = Date.now();
       conn.send(helloPayload(code));
+      sendPing(conn); // Antwortet der andere, kann er Heartbeat (ab v1.40)
       Object.values(groups).forEach((g) => { if (g.members.includes(code)) conn.send({ type: 'group', group: g }); });
       flushPending(code);
       flushActions(code);
       stories.syncTo(code);
       scheduleRender();
     });
-    conn.on('data', (data) => { try { handleData(code, data); } catch (e) { console.error(e); } });
+    conn.on('data', (data) => {
+      conn.wuRx = Date.now(); conn.wuPing = 0; // jedes Paket ist ein Lebenszeichen
+      if (data && (data.type === 'ping' || data.type === 'pong')) {
+        conn.wuHb = true;
+        // Antwort auf genau dieser Verbindung (nicht über conns[code] – das kann eine andere sein)
+        if (data.type === 'ping') { try { conn.send({ type: 'pong' }); } catch {} }
+        if (conns[code] === conn) markPresence();
+        return;
+      }
+      try { handleData(code, data); } catch (e) { console.error(e); }
+    });
     const drop = () => { if (conns[code] === conn) delete conns[code]; scheduleRender(); };
     conn.on('close', drop);
     conn.on('error', drop);
+  }
+
+  // ---------- Heartbeat: tote Verbindungen erkennen ----------
+  // Ohne das galt eine Verbindung als „online“, solange der DataChannel offen wirkte – auch wenn das
+  // iPhone längst im Hintergrund schlief oder das Netz gewechselt hatte. Nachrichten gingen dann ins
+  // Leere und erst nach dem Bestätigungs-Timeout über den Briefkasten; der Online-Punkt stimmte nicht.
+  function sendPing(conn) {
+    if (!conn || !conn.open) return;
+    if (!conn.wuPing) conn.wuPing = Date.now();
+    try { conn.send({ type: 'ping' }); } catch {}
+  }
+  let lastOnline = '';
+  function markPresence() {
+    const now = Object.keys(conns).filter(isOnline).sort().join(',');
+    if (now !== lastOnline) { lastOnline = now; scheduleRender(); }
+  }
+  function heartbeat() {
+    const now = Date.now();
+    for (const [code, conn] of Object.entries(conns)) {
+      if (LIB.connDead(connState(conn), now)) {
+        // Tote Verbindung ersetzen: schließen und sofort neu verbinden
+        delete conns[code];
+        try { conn.close(); } catch {}
+        delete connecting[code];
+        connectTo(code);
+        flushPendingRelay(code);
+      } else sendPing(conn);
+    }
+    markPresence();
+  }
+
+  // ---------- Zurück im Vordergrund / Netz wieder da ----------
+  // iOS friert die Web-App im Hintergrund ein. Danach wirkt die Verbindung zum Signal-Server (PeerJS)
+  // oft noch offen, ist aber tot: Keine Anrufe und keine neuen Chat-Verbindungen kommen mehr an, bis
+  // man die Seite neu lädt. Deshalb beim Zurückkehren alles sofort prüfen und neu aufbauen.
+  let hiddenAt = document.hidden ? Date.now() : 0;
+  function checkPeer(force) {
+    if (!me) return;
+    if (!peer) return; // wird beim Start angelegt
+    if (peer.destroyed) { if (!calls.active()) startPeer(); return; }
+    if (peer.disconnected) { try { peer.reconnect(); } catch { restartPeer(1000); } return; }
+    if (!peer.open) return; // erster Verbindungsaufbau läuft noch
+    const ws = peer.socket && peer.socket._socket;
+    if (!LIB.needsSignalReconnect(force ? Infinity : 0, !!ws && ws.readyState === 1)) return;
+    // Mit derselben ID und demselben Token neu beim Server anmelden. Chat-Verbindungen und Anrufe bleiben bestehen.
+    try { peer.disconnect(); peer.reconnect(); } catch { restartPeer(1000); }
+  }
+  function wake(forceSignal) {
+    if (!me || document.hidden) return;
+    const away = hiddenAt ? Date.now() - hiddenAt : 0;
+    hiddenAt = 0;
+    checkPeer(forceSignal || LIB.needsSignalReconnect(away, true));
+    // Alle Verbindungen sofort anpingen; wer nicht antwortet, wird nach PROBE_MS ersetzt
+    Object.values(conns).forEach((c) => { c.wuPing = 0; sendPing(c); }); // frische Frist für die Antwort
+    setTimeout(heartbeat, LIB.PROBE_MS + 200);
+    Object.keys(connecting).forEach((c) => delete connecting[c]); // hängende Versuche nicht abwarten
+    connectAll();
+    markPresence();
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else wake(false); });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) wake(true); }); // aus dem Seiten-Cache zurück
+  window.addEventListener('online', () => wake(true));                           // Netz wieder da / gewechselt
+  window.addEventListener('offline', () => setNet(false));
+  window.addEventListener('focus', () => wake(false));
+  // Für Anrufe: kurz warten, bis die Verbindung zum Signal-Server steht
+  function ensurePeer(ms = 8000) {
+    checkPeer(false);
+    if (peer && peer.open) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        if (peer && peer.open) { clearInterval(iv); resolve(true); }
+        else if (Date.now() - t0 > ms) { clearInterval(iv); resolve(false); }
+      }, 200);
+    });
   }
 
   function helloPayload(code) {
@@ -676,7 +776,8 @@
   }
 
   function enqueue(code, fn) {
-    queues[code] = (queues[code] || Promise.resolve()).then(fn).catch(console.error);
+    // Zeitlimit: Ein hängender Schritt (z. B. eingefrorener Abruf) darf die Nachrichten danach nicht blockieren
+    queues[code] = (queues[code] || Promise.resolve()).then(() => LIB.withTimeout(fn(), 3 * 60000)).catch(console.error);
   }
 
   const oldVersionWarned = new Set();
@@ -714,7 +815,7 @@
         if (!msg.sentTo.includes(code)) { msg.sentTo.push(code); saveChat(chatId); scheduleRender(); }
         // Keine Bestätigung? Verbindung war wohl tot (z. B. PC aus) -> zusätzlich in den Briefkasten.
         // Wartezeit: 15 s + Übertragungszeit bei ~150 KB/s für Bilder/GIFs
-        const waitMs = 15000 + (wire.media ? Math.round(wire.media.data.length / 150) : 0);
+        const waitMs = 8000 +(wire.media ? Math.round(wire.media.data.length / 150) : 0);
         setTimeout(() => {
           if (!msg.deliveredTo.includes(code) && !(msg.relayedTo || []).includes(code)) enqueue(code, () => deliverTo(chatId, msg, code, true));
         }, waitMs);
@@ -731,8 +832,19 @@
 
   // Nachrichten an Offline-Empfänger nach kurzer Wartezeit über den Server schicken
   // (falls die direkte Verbindung doch noch klappt, geht es direkt)
-  function relayLater(chatId, msg, code, ms = 4000) {
+  // Kurz (1 s) statt 4 s warten: Ist keine lebende Verbindung da, geht es gleich über den Briefkasten.
+  function relayLater(chatId, msg, code, ms = 1000) {
     setTimeout(() => { if (!isOnline(code)) enqueue(code, () => deliverTo(chatId, msg, code)); }, ms);
+  }
+  // Verbindung als tot erkannt: Unbestätigte Nachrichten sofort über den Briefkasten statt Timeout abwarten
+  function flushPendingRelay(code) {
+    for (const [chatId, list] of Object.entries(chats)) {
+      for (const m of list) {
+        if (m.from === me.code && m.to && m.to.includes(code) && !m.deliveredTo.includes(code) && !(m.relayedTo || []).includes(code)) {
+          enqueue(code, () => deliverTo(chatId, m, code, true));
+        }
+      }
+    }
   }
   function relayPending() {
     flushActions();
@@ -7613,7 +7725,7 @@
     async function start(code, video) {
       if (cur) return;
       if (!hasMedia()) { toast('⚠️ Anrufe werden hier nicht unterstützt.'); return; }
-      if (!peer || !peer.open) { toast('⚠️ Keine Verbindung zum Netzwerk.'); return; }
+      if (!peer) { toast('⚠️ Keine Verbindung zum Netzwerk.'); return; }
       if (!isFriend(code)) return;
       cur = { id: crypto.randomUUID(), code, video, dir: 'out', state: 'calling', muted: false, camOn: video, facing: 'user', camIdx: 0 };
       const me_ = cur;
@@ -7621,10 +7733,14 @@
       keepAwake(true);
       setState('Kamera und Mikrofon werden gestartet…');
       connectTo(code); // Chat-Verbindung für Auflegen, Ablehnen, Kamera aus
-      let local;
-      try { [local] = await Promise.all([getStream(video), refreshIce()]); }
+      let local, peerOk;
+      // Parallel zu Kamera/Mikrofon: Verbindung zum Signal-Server prüfen und notfalls kurz auf den Wiederaufbau
+      // warten (z. B. direkt nach dem Entsperren). Früher scheiterte der Anruf dann sofort und klappte erst nach Neuladen.
+      try { [local, , peerOk] = await Promise.all([getStream(video), refreshIce(), ensurePeer(10000)]); }
       catch (e) { mediaError(e); if (cur === me_) { cur = null; keepAwake(false); closeUI(0); } return; }
       if (cur !== me_) { stopStream(local); return; } // inzwischen abgebrochen oder Gegenanruf angenommen
+      if (!peerOk) { end('unreachable'); return; }
+      connectTo(code); // jetzt, wo der Peer sicher verbunden ist
       cur.local = local;
       watchTracks(cur);
       cur.camOn = video && local.getVideoTracks().length > 0;
@@ -8560,7 +8676,16 @@
     const te = new TextEncoder(), td = new TextDecoder();
     let ident = null;        // { signPriv, encPriv, signPub, encPub }
     let ready = false;
-    let polling = false;
+    let polling = 0;         // seit wann ein Abholen läuft (0 = keins)
+    // Alle Abrufe zum Briefkasten-Server mit Zeitlimit. Ein Abruf, der beim Einfrieren der App (iPhone im
+    // Hintergrund, Sperrbildschirm) unterbrochen wurde, kann sonst ewig hängen – dann blieb das Abholen
+    // gesperrt bzw. die Sendewarteschlange zu diesem Freund stand, bis man die Seite neu lud.
+    const fetch = (u, opts = {}, ms = 20000) => {
+      if (typeof AbortController !== 'function') return window.fetch(u, opts);
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), ms);
+      return window.fetch(u, { ...opts, signal: ac.signal }).finally(() => clearTimeout(t));
+    };
     const known = {};        // code -> registriert beim Server? (true/false)
 
     const url = () => store.load('relayUrl', null) || DEFAULT_URL;
@@ -8758,7 +8883,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/octet-stream', 'X-From': me.code, 'X-Ts': String(ts), 'X-Sig': await sign(`send|${me.code}|${code}|${ts}`), ...(push ? {} : { 'X-Silent': '1' }) },
           body,
-        });
+        }, 20000 + Math.round(body.length / 50)); // Zeit für große Dateien (~50 KB/s im Mobilfunk)
         if (res.status === 404) { known[code] = false; return false; }
         return res.ok;
       } catch (e) { console.warn('Briefkasten senden:', e); return false; }
@@ -8766,8 +8891,9 @@
 
     // Eigenen Briefkasten leeren
     async function poll() {
-      if (!ready || !enabled() || polling) return;
-      polling = true;
+      // Hängt ein altes Abholen (z. B. eingefroren im Hintergrund) länger als 90 s, nicht mehr darauf warten
+      if (!ready || !enabled() || (polling && Date.now() - polling < 90000)) return;
+      const mine = (polling = Date.now());
       try {
         let ts = Date.now();
         const { items } = await post(`/v1/inbox/${me.code}`, { ts, sig: await sign(`inbox|${me.code}|${ts}`) });
@@ -8789,7 +8915,7 @@
         }
         relayPending();
       } catch (e) { console.warn('Briefkasten:', e); }
-      finally { polling = false; renderRelayStatus(); }
+      finally { if (polling === mine) polling = 0; renderRelayStatus(); }
     }
 
     // Web-Version: Push-Benachrichtigungen aufs Handy, auch wenn WhatsUp zu ist
@@ -9549,6 +9675,7 @@
     render();
     startPeer();
     setInterval(connectAll, RETRY_MS);
+    setInterval(heartbeat, LIB.HB_MS);
     relay.start();
     window.chatboxWindow.ready(); // jetzt dürfen Antworten aus Benachrichtigungen kommen
     scheduled.tick();

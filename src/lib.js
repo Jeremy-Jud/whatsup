@@ -147,7 +147,42 @@
     return JSON.parse(td.decode(pt));
   }
 
+  // ---------- Verbindungs-Lebenszeichen (Heartbeat) ----------
+  // Eine Chat-Verbindung kann „offen“ wirken, obwohl sie tot ist (z. B. iPhone im Hintergrund,
+  // Netzwechsel). Gegenstellen, die Pings beantworten (hb), gelten nur als online, solange in den
+  // letzten staleMs etwas von ihnen kam. Ältere Versionen ohne Heartbeat: wie bisher nur „offen“.
+  // c = { open, hb, rx (letzter Empfang), ping (erster unbeantworteter Ping) }
+  const HB_MS = 8000;      // so oft wird gepingt
+  const STALE_MS = 25000;  // so lange ohne Lebenszeichen = nicht mehr online
+  const PROBE_MS = 5000;   // so lange hat ein Ping Zeit für die Antwort, bevor die Verbindung ersetzt wird
+  function connAlive(c, now, staleMs = STALE_MS) {
+    if (!c || !c.open) return false;
+    if (!c.hb) return true;
+    return now - (Number(c.rx) || 0) <= staleMs;
+  }
+  // Tot = geschlossen, oder Heartbeat-fähig, zu lange still und ein Ping seit probeMs unbeantwortet
+  function connDead(c, now, staleMs = STALE_MS, probeMs = PROBE_MS) {
+    if (!c || !c.open) return true;
+    if (!c.hb || connAlive(c, now, staleMs)) return false;
+    return !!c.ping && now - c.ping >= probeMs;
+  }
+  // Nach so langer Zeit im Hintergrund ist die Verbindung zum Signal-Server oft schon still gestorben
+  // (iOS friert die Seite ein, der WebSocket wirkt danach noch offen, kommt aber nie mehr an)
+  const WAKE_RECONNECT_MS = 10000;
+  const needsSignalReconnect = (hiddenMs, socketOpen) => !socketOpen || hiddenMs >= WAKE_RECONNECT_MS;
+
+  // Promise mit Zeitlimit: hängt etwas (z. B. ein Abruf, der im Hintergrund eingefroren wurde),
+  // geht es nach ms mit fallback weiter, statt alles Folgende zu blockieren
+  function withTimeout(promise, ms, fallback) {
+    let t;
+    return Promise.race([
+      Promise.resolve(promise).finally(() => clearTimeout(t)),
+      new Promise((resolve) => { t = setTimeout(() => resolve(fallback), ms); }),
+    ]);
+  }
+
   return {
+    HB_MS, STALE_MS, PROBE_MS, connAlive, connDead, needsSignalReconnect, withTimeout,
     b64, unb64, matchText, norm,
     FILE_PREFIX, safeFileName, extOf, isRiskyFile, fileIcon, toFileDataUrl, dataUrlBytes,
     TIMER_OPTS, validTimer, timerLabel, timerShort, isExpired,

@@ -776,7 +776,8 @@
   }
 
   function enqueue(code, fn) {
-    queues[code] = (queues[code] || Promise.resolve()).then(fn).catch(console.error);
+    // Zeitlimit: Ein hängender Schritt (z. B. eingefrorener Abruf) darf die Nachrichten danach nicht blockieren
+    queues[code] = (queues[code] || Promise.resolve()).then(() => LIB.withTimeout(fn(), 3 * 60000)).catch(console.error);
   }
 
   const oldVersionWarned = new Set();
@@ -7724,7 +7725,7 @@
     async function start(code, video) {
       if (cur) return;
       if (!hasMedia()) { toast('⚠️ Anrufe werden hier nicht unterstützt.'); return; }
-      if (!peer || !peer.open) { toast('⚠️ Keine Verbindung zum Netzwerk.'); return; }
+      if (!peer) { toast('⚠️ Keine Verbindung zum Netzwerk.'); return; }
       if (!isFriend(code)) return;
       cur = { id: crypto.randomUUID(), code, video, dir: 'out', state: 'calling', muted: false, camOn: video, facing: 'user', camIdx: 0 };
       const me_ = cur;
@@ -7732,10 +7733,14 @@
       keepAwake(true);
       setState('Kamera und Mikrofon werden gestartet…');
       connectTo(code); // Chat-Verbindung für Auflegen, Ablehnen, Kamera aus
-      let local;
-      try { [local] = await Promise.all([getStream(video), refreshIce()]); }
+      let local, peerOk;
+      // Parallel zu Kamera/Mikrofon: Verbindung zum Signal-Server prüfen und notfalls kurz auf den Wiederaufbau
+      // warten (z. B. direkt nach dem Entsperren). Früher scheiterte der Anruf dann sofort und klappte erst nach Neuladen.
+      try { [local, , peerOk] = await Promise.all([getStream(video), refreshIce(), ensurePeer(10000)]); }
       catch (e) { mediaError(e); if (cur === me_) { cur = null; keepAwake(false); closeUI(0); } return; }
       if (cur !== me_) { stopStream(local); return; } // inzwischen abgebrochen oder Gegenanruf angenommen
+      if (!peerOk) { end('unreachable'); return; }
+      connectTo(code); // jetzt, wo der Peer sicher verbunden ist
       cur.local = local;
       watchTracks(cur);
       cur.camOn = video && local.getVideoTracks().length > 0;
@@ -8671,7 +8676,16 @@
     const te = new TextEncoder(), td = new TextDecoder();
     let ident = null;        // { signPriv, encPriv, signPub, encPub }
     let ready = false;
-    let polling = false;
+    let polling = 0;         // seit wann ein Abholen läuft (0 = keins)
+    // Alle Abrufe zum Briefkasten-Server mit Zeitlimit. Ein Abruf, der beim Einfrieren der App (iPhone im
+    // Hintergrund, Sperrbildschirm) unterbrochen wurde, kann sonst ewig hängen – dann blieb das Abholen
+    // gesperrt bzw. die Sendewarteschlange zu diesem Freund stand, bis man die Seite neu lud.
+    const fetch = (u, opts = {}, ms = 20000) => {
+      if (typeof AbortController !== 'function') return window.fetch(u, opts);
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), ms);
+      return window.fetch(u, { ...opts, signal: ac.signal }).finally(() => clearTimeout(t));
+    };
     const known = {};        // code -> registriert beim Server? (true/false)
 
     const url = () => store.load('relayUrl', null) || DEFAULT_URL;
@@ -8869,7 +8883,7 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/octet-stream', 'X-From': me.code, 'X-Ts': String(ts), 'X-Sig': await sign(`send|${me.code}|${code}|${ts}`), ...(push ? {} : { 'X-Silent': '1' }) },
           body,
-        });
+        }, 20000 + Math.round(body.length / 50)); // Zeit für große Dateien (~50 KB/s im Mobilfunk)
         if (res.status === 404) { known[code] = false; return false; }
         return res.ok;
       } catch (e) { console.warn('Briefkasten senden:', e); return false; }
@@ -8877,8 +8891,9 @@
 
     // Eigenen Briefkasten leeren
     async function poll() {
-      if (!ready || !enabled() || polling) return;
-      polling = true;
+      // Hängt ein altes Abholen (z. B. eingefroren im Hintergrund) länger als 90 s, nicht mehr darauf warten
+      if (!ready || !enabled() || (polling && Date.now() - polling < 90000)) return;
+      const mine = (polling = Date.now());
       try {
         let ts = Date.now();
         const { items } = await post(`/v1/inbox/${me.code}`, { ts, sig: await sign(`inbox|${me.code}|${ts}`) });
@@ -8900,7 +8915,7 @@
         }
         relayPending();
       } catch (e) { console.warn('Briefkasten:', e); }
-      finally { polling = false; renderRelayStatus(); }
+      finally { if (polling === mine) polling = 0; renderRelayStatus(); }
     }
 
     // Web-Version: Push-Benachrichtigungen aufs Handy, auch wenn WhatsUp zu ist

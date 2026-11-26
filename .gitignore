@@ -7,3 +7,4 @@ dist-studio/
 dist-web-studio/
 
 relay/.wrangler/
+studio/.wrangler/

@@ -611,7 +611,8 @@ async function codeSigned(env, code, text, sig) {
   const r = await (await box.fetch(`https://box/v1/verify/${code}`, { method: 'POST', body: JSON.stringify({ text, sig }) })).json().catch(() => ({}));
   return !!r.ok;
 }
-const admins = (env) => clean(env.ADMIN_CODES).toUpperCase().split(/[\s,]+/).filter((c) => CODE_RE.test(c));
+// Admins (haben auch Pro): feste Codes (ADMIN_CODES) und die Test-Konten aus WhatsUp Studio (STUDIO_ADMIN_CODES)
+const admins = (env) => `${clean(env.ADMIN_CODES)},${clean(env.STUDIO_ADMIN_CODES)}`.toUpperCase().split(/[\s,]+/).filter((c) => CODE_RE.test(c));
 
 // ---------- WhatsUp Pro ----------
 // Käufer zahlen bar oder per Überweisung (ihr Code in der Mitteilung) und melden „bezahlt“ (signiert).

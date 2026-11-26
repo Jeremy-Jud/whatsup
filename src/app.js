@@ -1853,8 +1853,10 @@
     let mine = store.load('pro', { status: 'none' });   // none | pending | paid | rejected | revoked
     let others = store.load('proOthers', {});           // Code -> 1: Freunde mit Pro (für das ⭐)
     let price = 2;
-    // Admins haben Pro immer (wer Admin ist, sagt der Server)
-    let admin = store.load('proAdmin', false), adminChecked = false;
+    // Admins haben Pro immer (wer Admin ist, sagt der Server).
+    // WhatsUp Studio: Jedes Konto hat Pro und das Admin-Panel. Was der Server erledigt (Nutzerliste, Käufe,
+    // Geschenke …), klappt aber nur für Codes, die der Briefkasten-Server als Admin kennt (ADMIN_CODES/STUDIO_ADMIN_CODES).
+    let admin = STUDIO || store.load('proAdmin', false), adminChecked = false;
     const isPro = () => mine.status === 'paid' || admin;
     const has = (code) => (me && code === me.code ? isPro() : !!others[code]);
     const PERKS = [
@@ -1891,7 +1893,7 @@
       scheduleRender();
     }
     function setAdmin(a) {
-      a = !!a;
+      a = !!a || STUDIO;
       if (a) grantAllAch();
       if (a === admin) return;
       const was = isPro();
@@ -4613,8 +4615,12 @@
   async function refreshAdmin() {
     let isAdm = false;
     if (relay.ready()) { try { isAdm = await relay.isAdmin(true); pro.setAdmin(isAdm); } catch { isAdm = false; } }
-    if (!isAdm) { $('adminSection').classList.add('hidden'); return; }
+    if (!isAdm && !STUDIO) { $('adminSection').classList.add('hidden'); return; }
     $('adminSection').classList.remove('hidden');
+    // Studio: Panel immer da. Kennt der Server diesen Code (noch) nicht als Admin, sagen wir es statt stiller Fehler.
+    $('adminStudioHint').classList.toggle('hidden', isAdm || !relay.ready());
+    $('adminStudioHint').textContent = `Studio: Der Server kennt ${me.code} noch nicht als Admin – Nutzerliste, Einkäufe und Geschenke gehen erst, wenn der Code eingetragen ist.`;
+    if (!isAdm) { $('adminCount').textContent = 'nur für eingetragene Admins'; return; }
     $('adminCount').textContent = 'wird geladen…';
     loadPurchases().catch(() => { $('adminPurchCount').textContent = 'nicht erreichbar'; });
     try {
@@ -6831,7 +6837,7 @@
       if (t === 'chall') renderChall();
     }
     $('achTabs').querySelectorAll('button').forEach((b) => { b.onclick = () => setTab(b.dataset.tab); });
-    function open() { setTab(tab); relay.isAdmin().then((a) => { isAdmin = a; $('challAdmin').classList.toggle('hidden', !a); }); }
+    function open() { setTab(tab); relay.isAdmin().then((a) => { isAdmin = a || STUDIO; $('challAdmin').classList.toggle('hidden', !isAdmin); }); }
 
     // ---------- Rangliste ----------
     const fmtVal = (t, v) => (t === 'ach' ? `🏆 ${v}` : t === 'fire' ? `🔥 ${v} ${v === 1 ? 'Tag' : 'Tage'}` : `🏅 ${v} Pkt.`);

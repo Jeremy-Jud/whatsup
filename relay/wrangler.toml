@@ -36,6 +36,8 @@ new_sqlite_classes = ["Reels", "ReelBlob"]
 VAPID_SUBJECT = "https://github.com/Jeremy-Jud/whatsup"
 # UpReels: Codes, die jedes Reel und jeden Kommentar löschen dürfen (Komma-getrennt)
 ADMIN_CODES = "V5KGWG,QM3UNP"
+# Test-Konten aus WhatsUp Studio: Admin-Panel und Pro wie ADMIN_CODES (Komma-getrennt; Code steht in Studio unter dem Namen)
+STUDIO_ADMIN_CODES = "NXH9YQ"
 # Geheime Werte (nicht hier!): VAPID_PUBLIC, VAPID_PRIVATE  ->  wrangler secret put …
 # Optional für Anrufe durch strenge Netzwerke (Cloudflare Realtime TURN, kostet ca. 0,05 $/GB weitergeleitet): TURN_KEY_ID, TURN_KEY_TOKEN
 # Optional für WhatsUp Pro per Karte (Stripe): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET

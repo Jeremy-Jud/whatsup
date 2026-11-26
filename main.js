@@ -5,10 +5,16 @@ const fs = require('fs');
 
 const REPO = 'Jeremy-Jud/whatsup';
 const RELEASES_URL = `https://github.com/${REPO}/releases/latest`;
-const ICON_PATH = path.join(__dirname, 'src', 'assets', 'logo.png');
-const APP_ID = 'com.whatsup.app';
-// Feste Kennung, über die Windows Antworten aus Benachrichtigungen an WhatsUp zurückgibt
-const TOAST_CLSID = '{7B3E6C1A-5D2F-4E8B-9A41-2C6F0D8E3B57}';
+// „WhatsUp Studio“: Test-App, die neben WhatsUp installiert wird (gebaut mit scripts/studio.js).
+// Eigener Name, eigenes (violettes) Symbol, eigene Daten und eigene Windows-Kennung – und keine Updates
+// aus dem normalen Kanal, sonst würde sich Studio selbst durch die veröffentlichte Version ersetzen.
+const PKG = require('./package.json');
+const STUDIO = !!PKG.studio;
+const APP_NAME = STUDIO ? 'WhatsUp Studio' : 'WhatsUp';
+const ICON_PATH = path.join(__dirname, 'src', 'assets', STUDIO ? 'logo-studio.png' : 'logo.png');
+const APP_ID = STUDIO ? 'com.whatsup.studio' : 'com.whatsup.app';
+// Feste Kennung, über die Windows Antworten aus Benachrichtigungen an WhatsUp (bzw. Studio) zurückgibt
+const TOAST_CLSID = STUDIO ? '{B8021527-9C76-4D0B-B1BE-F17DAEAA05FA}' : '{7B3E6C1A-5D2F-4E8B-9A41-2C6F0D8E3B57}';
 if (process.platform === 'win32') {
   try { app.setToastActivatorCLSID(TOAST_CLSID); } catch (e) { console.warn('Toast-CLSID:', e); }
 }
@@ -33,8 +39,9 @@ if (profileArg) {
   const name = profileArg.split('=')[1].replace(/[^a-z0-9_-]/gi, '');
   if (name) app.setPath('userData', path.join(app.getPath('appData'), 'Chatbox-' + name));
 } else {
-  // Daten bleiben im bisherigen Ordner, damit Chats nach der Umbenennung in WhatsUp erhalten bleiben
-  app.setPath('userData', path.join(app.getPath('appData'), 'Chatbox'));
+  // Daten bleiben im bisherigen Ordner, damit Chats nach der Umbenennung in WhatsUp erhalten bleiben.
+  // Studio hat einen eigenen Ordner: eigenes Test-Konto, die echten Chats bleiben unberührt.
+  app.setPath('userData', path.join(app.getPath('appData'), STUDIO ? 'Chatbox-Studio' : 'Chatbox'));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -59,10 +66,11 @@ function createWindow() {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0e0e10' : '#ffffff',
     // Testmodus: Fenster wird gezeichnet, ist aber unsichtbar und nicht klickbar
     ...(TEST_MODE ? { opacity: 0, focusable: false, skipTaskbar: true } : {}),
-    title: 'WhatsUp',
+    title: APP_NAME,
     icon: ICON_PATH,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      additionalArguments: STUDIO ? ['--whatsup-studio'] : [], // preload.js meldet der Oberfläche „Studio“
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -112,9 +120,9 @@ function createTray() {
   if (TEST_MODE) return;
   const img = nativeImage.createFromPath(ICON_PATH).resize({ width: 32, height: 32, quality: 'best' });
   tray = new Tray(img);
-  tray.setToolTip('WhatsUp');
+  tray.setToolTip(APP_NAME);
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'WhatsUp öffnen', click: showWindow },
+    { label: `${APP_NAME} öffnen`, click: showWindow },
     { type: 'separator' },
     { label: 'Beenden', click: () => { quitting = true; app.quit(); } },
   ]));
@@ -127,8 +135,9 @@ function createTray() {
 function ensureShortcuts() {
   if (process.platform !== 'win32' || !app.isPackaged || IS_PORTABLE) return;
   const exe = process.execPath;
-  const opts = { target: exe, cwd: path.dirname(exe), appUserModelId: APP_ID, toastActivatorClsid: TOAST_CLSID, description: 'WhatsUp', icon: exe, iconIndex: 0 };
-  const startMenu = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'WhatsUp.lnk');
+  const opts = { target: exe, cwd: path.dirname(exe), appUserModelId: APP_ID, toastActivatorClsid: TOAST_CLSID, description: APP_NAME, icon: exe, iconIndex: 0 };
+  // Eigener Name pro App: Studio darf die Verknüpfungen von WhatsUp nie überschreiben
+  const startMenu = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', `${APP_NAME}.lnk`);
   try {
     let ok = false;
     try {
@@ -142,7 +151,7 @@ function ensureShortcuts() {
   const flag = path.join(app.getPath('userData'), 'desktop-shortcut-created');
   if (!fs.existsSync(flag)) {
     try {
-      const desktop = path.join(app.getPath('desktop'), 'WhatsUp.lnk');
+      const desktop = path.join(app.getPath('desktop'), `${APP_NAME}.lnk`);
       if (!fs.existsSync(desktop)) shell.writeShortcutLink(desktop, 'create', opts);
       fs.writeFileSync(flag, '1');
     } catch (e) { console.warn('Desktop-Verknüpfung:', e); }
@@ -271,7 +280,7 @@ function ensurePopup() {
     resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
     skipTaskbar: true, alwaysOnTop: true, show: false,
     ...(TEST_MODE ? { opacity: 0 } : {}),
-    title: 'WhatsUp',
+    title: APP_NAME,
     webPreferences: {
       preload: path.join(__dirname, 'popup-preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true,
@@ -323,7 +332,7 @@ ipcMain.on('popup:focus', (e) => { if (fromPopup(e) && !TEST_MODE) popup.focus()
 ipcMain.on('notify', (_e, n) => {
   if (!n || typeof n !== 'object') return;
   const chatId = CHAT_ID_RE.test(n.chatId || '') ? n.chatId : null;
-  const title = String(n.title || 'WhatsUp').slice(0, 80);
+  const title = String(n.title || APP_NAME).slice(0, 80);
   const body = String(n.body || '').slice(0, 200);
   const placeholder = String(n.replyPlaceholder || 'Antworten…').slice(0, 60);
   if (prefs.popupNotify) {
@@ -377,7 +386,7 @@ ipcMain.on('badge', (_e, count, dataUrl) => {
   } else {
     win.setOverlayIcon(null, '');
   }
-  if (tray) tray.setToolTip(n ? `WhatsUp – ${n} ungelesen` : 'WhatsUp');
+  if (tray) tray.setToolTip(n ? `${APP_NAME} – ${n} ungelesen` : APP_NAME);
 });
 
 ipcMain.on('prefs', (_e, p) => {
@@ -396,7 +405,8 @@ ipcMain.on('prefs', (_e, p) => {
 // Installierte Version (Setup): electron-updater lädt das Update von GitHub,
 // prüft die SHA-512-Prüfsumme und installiert es.
 // Portable Version / Entwicklung: nur prüfen und die Download-Seite öffnen.
-const canSelfUpdate = app.isPackaged && !IS_PORTABLE;
+// Studio: nie – neue Test-Versionen werden direkt installiert (npm run studio).
+const canSelfUpdate = app.isPackaged && !IS_PORTABLE && !STUDIO;
 let autoUpdater = null;
 if (canSelfUpdate) {
   ({ autoUpdater } = require('electron-updater'));
@@ -417,9 +427,12 @@ const newer = (a, b) => {
 ipcMain.handle('app:info', () => ({
   version: app.getVersion(),
   mode: !app.isPackaged ? 'dev' : IS_PORTABLE ? 'portable' : 'installed',
+  studio: STUDIO,
+  build: PKG.studioBuild || null, // Studio: wann und aus welchem Stand gebaut
 }));
 
 ipcMain.handle('update:check', async () => {
+  if (STUDIO) return { latest: null, available: false, studio: true };
   if (canSelfUpdate) {
     const r = await autoUpdater.checkForUpdates();
     const latest = r && r.updateInfo && r.updateInfo.version;
@@ -434,6 +447,7 @@ ipcMain.handle('update:check', async () => {
 });
 
 ipcMain.handle('update:download', async () => {
+  if (STUDIO) return false;
   if (!canSelfUpdate) { shell.openExternal(RELEASES_URL); return false; }
   await autoUpdater.downloadUpdate();
   return true;

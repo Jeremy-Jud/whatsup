@@ -27,6 +27,19 @@
   const POSTER_MAX = 200 * 1024; // Vorschaubild eines Videos
   const $ =(id) => document.getElementById(id);
 
+  // ================= WhatsUp Studio =================
+  // Test-App für neue Versionen, bevor sie veröffentlicht werden: gleiches WhatsUp, violettes Logo, eigene Daten.
+  // Windows: preload.js meldet es (gebaut mit scripts/studio.js). Web: build-web.js --studio setzt WHATSUP_STUDIO.
+  const STUDIO = !!(window.WHATSUP_STUDIO || (window.whatsupApp && window.whatsupApp.studio));
+  if (STUDIO) {
+    document.documentElement.classList.add('is-studio');
+    document.title = 'WhatsUp Studio';
+    $('titleText').textContent = 'WhatsUp Studio';
+    const setupTitle = document.querySelector('#setupNew h1');
+    if (setupTitle) setupTitle.textContent = 'WhatsUp Studio';
+    document.querySelectorAll('img[src="assets/logo.png"], img[src^="assets/logo.png?"]').forEach((img) => { img.src = 'assets/logo-studio.png'; });
+  }
+
   // ================= Speicher =================
   let loggedOut = false; // Konto ist auf ein anderes Gerät umgezogen: nichts mehr speichern
   const store = {
@@ -2415,7 +2428,8 @@
 
   let view = 'viewSetup';
   let activeChat = null;
-  const TITLES = { viewList: 'WhatsUp', viewChat: 'WhatsUp', viewSettings: 'Einstellungen', viewAchievements: 'Erfolge', viewSetup: 'WhatsUp', viewStatus: 'Status', viewReels: 'UpReels', viewEvent: 'Event' };
+  const APP_TITLE = STUDIO ? 'WhatsUp Studio' : 'WhatsUp';
+  const TITLES = { viewList: APP_TITLE, viewChat: APP_TITLE, viewSettings: 'Einstellungen', viewAchievements: 'Erfolge', viewSetup: APP_TITLE, viewStatus: 'Status', viewReels: 'UpReels', viewEvent: 'Event' };
   const TABS = ['viewStatus', 'viewReels', 'viewEvent', 'viewList', 'viewSettings'];
   let lastTab = 'viewList';
 
@@ -5181,6 +5195,13 @@
   const upd = { state: 'idle', latest: null, mode: 'dev', version: '' };
   function renderUpdate() {
     const btn = $('updateBtn'), st = $('updateStatus'), bar = $('updateBar');
+    if (STUDIO) {
+      // Studio bekommt keine Updates aus dem normalen Kanal: neue Test-Versionen werden direkt eingespielt
+      $('appVersion').textContent = `${String(upd.version).replace(/-studio\..*$/, '')} · Studio${upd.build ? ' (' + upd.build + ')' : ''}`;
+      st.textContent = 'Test-Version. Neue Test-Versionen werden direkt eingespielt.';
+      btn.classList.add('hidden'); bar.classList.add('hidden'); $('updateDot').classList.add('hidden');
+      return;
+    }
     $('appVersion').textContent = upd.version + (upd.mode === 'portable' ? ' (ohne Installation)' : upd.mode === 'dev' ? ' (Entwicklung)' : upd.mode === 'web' ? ' (Web)' : '');
     bar.classList.toggle('hidden', upd.state !== 'downloading');
     btn.disabled = upd.state === 'checking' || upd.state === 'downloading';
@@ -5228,9 +5249,9 @@
   window.whatsupApp.onUpdateReady(() => { upd.state = 'ready'; renderUpdate(); });
   window.whatsupApp.onUpdateError((m) => { if (upd.state === 'downloading') { upd.state = 'error'; upd.error = m.slice(0, 120); renderUpdate(); } });
   window.whatsupApp.info().then((i) => {
-    upd.version = i.version; upd.mode = i.mode; renderUpdate();
+    upd.version = i.version; upd.mode = i.mode; upd.build = i.build || (window.WHATSUP_STUDIO && window.WHATSUP_STUDIO.build) || null; renderUpdate();
     $('loginRow').classList.toggle('hidden', i.mode !== 'installed');
-    if (settings.autoUpdate && (i.mode === 'installed' || i.mode === 'portable')) setTimeout(() => checkForUpdate(true), 4000);
+    if (!STUDIO && settings.autoUpdate && (i.mode === 'installed' || i.mode === 'portable')) setTimeout(() => checkForUpdate(true), 4000);
   });
 
   // ================= Events =================

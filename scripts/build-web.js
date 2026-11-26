@@ -1,12 +1,19 @@
 // Baut die Web-Version (iPhone/iPad/Browser) nach dist-web/.
 // Nutzt dieselben Dateien aus src/ wie die Windows-App und ergänzt nur, was im Browser fehlt.
 //   npm run build:web
+//   node scripts/build-web.js --studio   -> Test-Version „WhatsUp Studio“ nach dist-web-studio/ (violettes Logo,
+//                                           eigene Adresse, nicht für Suchmaschinen; siehe scripts/studio.js)
 const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const out = path.join(root, 'dist-web');
-const { version } = require(path.join(root, 'package.json'));
+const STUDIO = process.argv.includes('--studio');
+const out = path.join(root, STUDIO ? 'dist-web-studio' : 'dist-web');
+const pkgVersion = require(path.join(root, 'package.json')).version;
+// Studio: jede Test-Version bekommt eine eigene Nummer, damit Safari und der Service Worker sie sicher neu laden
+const stamp = new Date().toISOString().replace(/\D/g, '').slice(2, 14); // JJMMTThhmmss (UTC)
+const version = STUDIO ? `${pkgVersion}-studio.${stamp}` : pkgVersion;
+const studioBuild = STUDIO ? (process.env.STUDIO_BUILD || stamp) : null;
 
 const peerjs = path.join(root, 'node_modules', 'peerjs', 'dist', 'peerjs.min.js');
 if (!fs.existsSync(peerjs)) {
@@ -21,8 +28,16 @@ fs.copyFileSync(path.join(root, 'web', 'web.css'), path.join(out, 'web.css'));
 fs.copyFileSync(path.join(root, 'web', 'manifest.webmanifest'), path.join(out, 'manifest.webmanifest'));
 // Musik für UpReels (CC BY 4.0, siehe web/music/CREDITS.md) – auch die Windows-App lädt sie von hier
 fs.cpSync(path.join(root, 'web', 'music'), path.join(out, 'music'), { recursive: true });
-for (const f of fs.readdirSync(path.join(root, 'web', 'icons'))) {
-  fs.copyFileSync(path.join(root, 'web', 'icons', f), path.join(out, f));
+const iconDir = STUDIO ? 'icons-studio' : 'icons';
+for (const f of fs.readdirSync(path.join(root, 'web', iconDir))) {
+  fs.copyFileSync(path.join(root, 'web', iconDir, f), path.join(out, f));
+}
+if (STUDIO) {
+  // Studio: überall das violette Logo, eigener Name auf dem Home-Bildschirm
+  fs.copyFileSync(path.join(root, 'src', 'assets', 'logo-studio.png'), path.join(out, 'assets', 'logo.png'));
+  const manifest = JSON.parse(fs.readFileSync(path.join(out, 'manifest.webmanifest'), 'utf8'));
+  Object.assign(manifest, { name: 'WhatsUp Studio', short_name: 'Studio', description: 'Test-Version von WhatsUp', theme_color: '#8c1aff' });
+  fs.writeFileSync(path.join(out, 'manifest.webmanifest'), JSON.stringify(manifest, null, 2) + '\n');
 }
 const withVersion = (f) => fs.readFileSync(path.join(root, 'web', f), 'utf8').replaceAll('__VERSION__', version);
 fs.writeFileSync(path.join(out, 'shim.js'), withVersion('shim.js'));
@@ -38,7 +53,7 @@ replace('<meta charset="utf-8">', `<meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="WhatsUp">
+  <meta name="apple-mobile-web-app-title" content="${STUDIO ? 'Studio' : 'WhatsUp'}">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0e0e10" media="(prefers-color-scheme: dark)">
@@ -46,9 +61,22 @@ replace('<meta charset="utf-8">', `<meta charset="utf-8">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" type="image/png" href="icon-192.png">`);
 replace('<link rel="stylesheet" href="style.css">', '<link rel="stylesheet" href="style.css">\n  <link rel="stylesheet" href="web.css">');
+// Studio-Kennzeichen als eigene Datei: die Content-Security-Policy erlaubt nur Skripte aus eigenen Dateien
+if (STUDIO) fs.writeFileSync(path.join(out, 'studio.js'), `window.WHATSUP_STUDIO = ${JSON.stringify({ build: studioBuild })};\n`);
 replace('<script src="../node_modules/peerjs/dist/peerjs.min.js"></script>',
+  (STUDIO ? '<script src="studio.js"></script>\n  ' : '') +
   '<script src="shim.js"></script>\n  <script src="peerjs.min.js"></script>');
 replace('<div class="group" id="infoGroup">', '<div class="group" id="infoGroup">\n        <div class="setting"><span class="muted" id="webInfo"></span></div>');
+
+if (STUDIO) {
+  // Test-Version: nicht in Suchmaschinen, keine Infoseite und keine Sitemap
+  replace('<title>WhatsUp</title>', '<title>WhatsUp Studio</title>\n  <meta name="robots" content="noindex, nofollow">');
+  html = html.replace(/(href|src)="(?!https?:|data:|#)([^"?]+\.(?:css|js))"/g, `$1="$2?v=${version}"`);
+  fs.writeFileSync(path.join(out, 'index.html'), html);
+  fs.writeFileSync(path.join(out, 'robots.txt'), 'User-agent: *\nDisallow: /\n');
+  console.log(`WhatsUp Studio (Web) ${version} gebaut: ${path.relative(root, out)}/`);
+  process.exit(0);
+}
 
 // ---- Für Suchmaschinen und Link-Vorschauen (Google, WhatsApp, Discord, LinkedIn …) ----
 const SITE = 'https://jeremy-jud.github.io/whatsup/';

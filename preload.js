@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('chatboxWindow', {
 });
 
 contextBridge.exposeInMainWorld('whatsupApp', {
+  studio: process.argv.includes('--whatsup-studio'), // Test-App „WhatsUp Studio“ (siehe main.js)
   info: () => ipcRenderer.invoke('app:info'),
   checkUpdate: () => ipcRenderer.invoke('update:check'),
   downloadUpdate: () => ipcRenderer.invoke('update:download'),

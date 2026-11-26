@@ -1,0 +1,14 @@
+// WhatsUp Studio (Web): Handy-Link mit Passwortschutz. Hochladen mit „npm run studio:web“.
+// run_worker_first: Jede Anfrage geht zuerst durch worker.js (Passwort-Prüfung), auch für die statischen Dateien.
+{
+  "$schema": "../relay/node_modules/wrangler/config-schema.json",
+  "name": "whatsup-studio",
+  "main": "worker.js",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "assets": {
+    "directory": "../dist-web-studio",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
+}

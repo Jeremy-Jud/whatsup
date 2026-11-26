@@ -16,7 +16,7 @@ Jede Änderung an der App (`src/`, `main.js`, `preload.js`, `web/`, `scripts/bui
 
 WhatsUp Studio = gleiches WhatsUp mit violettem Logo, eigenem Test-Konto und eigenen Daten:
 - Windows: Programm `%LOCALAPPDATA%\Programs\whatsup-studio`, Daten `%APPDATA%\Chatbox-Studio` (WhatsUp: `…\Programs\whatsup`, `%APPDATA%\Chatbox`). Keine Updates aus dem normalen Kanal.
-- Web: eigener Cloudflare Worker „whatsup-studio“ (statische Dateien), eigene Adresse = eigener Speicher im Browser.
+- Web: eigener Cloudflare Worker „whatsup-studio“ (`studio/wrangler.jsonc`), eigene Adresse = eigener Speicher im Browser. **Passwortgeschützt** (`studio/worker.js`): Nur der Nutzer soll hinein. Das Passwort setzt der Nutzer selbst (`npx wrangler secret put STUDIO_PASSWORD --name whatsup-studio` im Ordner `relay/`); ohne Passwort ist der Link gesperrt. Das Passwort nie selbst setzen, erfragen oder anzeigen.
 - Erkennung: `package.json` der App hat `studio: true` (scripts/studio.js) bzw. `window.WHATSUP_STUDIO` (build-web.js `--studio`).
 - Violette Symbole neu erzeugen, falls sich das Logo ändert: `scripts/make-studio-icons.ps1`.
 

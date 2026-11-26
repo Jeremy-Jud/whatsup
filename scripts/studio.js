@@ -81,13 +81,18 @@ function buildWeb() {
   if (!fs.existsSync(wrangler)) throw new Error('wrangler fehlt. Bitte zuerst "npm ci --prefix relay" ausführen.');
   run(process.execPath, [path.join(root, 'scripts', 'build-web.js'), '--studio'], { env: { ...process.env, STUDIO_BUILD: studioBuild } });
   console.log('WhatsUp Studio (Web) wird hochgeladen …');
-  // cwd = Projektordner (ohne wrangler-Konfiguration); relay/wrangler.toml gehört zum Briefkasten und bleibt unberührt
-  const d = spawnSync(process.execPath, [wrangler, 'deploy', '--assets', 'dist-web-studio', '--name', WORKER_NAME,
-    '--compatibility-date', '2026-11-01', '--message', `Studio ${studioBuild}`], { cwd: root, encoding: 'utf8' });
+  // studio/wrangler.jsonc: Passwortschutz (studio/worker.js) vor allen Dateien. relay/ (Briefkasten) bleibt unberührt.
+  const config = path.join(root, 'studio', 'wrangler.jsonc');
+  const d = spawnSync(process.execPath, [wrangler, 'deploy', '--config', config, '--message', `Studio ${studioBuild}`], { cwd: root, encoding: 'utf8' });
   process.stdout.write(d.stdout || ''); process.stderr.write(d.stderr || '');
   if (d.status !== 0) throw new Error('Hochladen zu Cloudflare ist fehlgeschlagen. Ist wrangler angemeldet? (npx wrangler login)');
   const url = ((d.stdout || '').match(/https:\/\/[a-z0-9.-]+\.workers\.dev/i) || [])[0];
   console.log(`\nLink fürs Handy: ${url ? url + '/' : '(Adresse siehe oben)'}`);
+  // Ohne Passwort ist Studio gesperrt – Hinweis, wie man es setzt (das Passwort tippt der Nutzer selbst ein)
+  const s = spawnSync(process.execPath, [wrangler, 'secret', 'list', '--config', config], { cwd: root, encoding: 'utf8' });
+  if (s.status === 0 && !/STUDIO_PASSWORD/.test(s.stdout || '')) {
+    console.log(`\nAchtung: Noch kein Passwort gesetzt – der Link ist gesperrt. Im Ordner relay/ ausführen:\n  npx wrangler secret put STUDIO_PASSWORD --name ${WORKER_NAME}`);
+  }
 }
 
 (async () => {

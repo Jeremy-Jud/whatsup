@@ -13,7 +13,7 @@
   const MAX_MB = 25;                                              // max. Größe pro Bild/GIF
   const MAX_MEDIA = Math.ceil(MAX_MB * 1024 * 1024 * 4 / 3) + 64; // als Base64-Daten-URL
   const OLD_MAX_MEDIA = 10 * 1024 * 1024; // Grenze bis v1.10 – ältere Versionen lehnen Größeres ab
-  const PROTO = 7;                        // Protokoll-Version (3 = große Dateien bis 25 MB, 4 = Sprachnachrichten, 5 = Sticker, 6 = Videos, 7 = Dateien)
+  const PROTO = 8;                        // Protokoll-Version (3 = große Dateien bis 25 MB, 4 = Sprachnachrichten, 5 = Sticker, 6 = Videos, 7 = Dateien, 8 = Anrufe mit Klingel-Bestätigung)
   // GIF-Suche über GIPHY: kostenlosen API-Schlüssel unter https://developers.giphy.com erstellen und hier eintragen.
   // Leer = keine GIF-Suche (der GIF-Reiter im Emoji-Feld wird dann nicht angezeigt).
   const GIPHY_KEY = '1a5n0qYKPM1xrHMbchCFIdo9Yxc5pyGw';
@@ -337,12 +337,14 @@
 
   // ---------- Verbindungswege (ICE) für Anrufe und direkte Chats ----------
   // STUN findet die eigene öffentliche Adresse. TURN leitet weiter, wenn sich zwei Geräte nicht direkt erreichen
-  // (z. B. Mobilfunk, Firmen- oder Schulnetz). Ein eigener TURN-Zugang kommt vom Briefkasten-Server, falls dort eingerichtet.
+  // (z. B. Mobilfunk, Firmen- oder Schulnetz). Der TURN-Zugang kommt vom Briefkasten-Server (Cloudflare), falls dort eingerichtet.
+  // Die früher hier eingetragenen öffentlichen PeerJS-TURN-Server (eu-0/us-0.turn.peerjs.com) gibt es nicht mehr
+  // (keine DNS-Adresse) – ohne eigenen TURN-Zugang klappen Anrufe nur, wenn sich die Geräte direkt erreichen.
   const ICE_BASE = [
     { urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] },
-    { urls: ['turn:eu-0.turn.peerjs.com:3478', 'turn:us-0.turn.peerjs.com:3478'], username: 'peerjs', credential: 'peerjsp' },
   ];
   let iceServers = ICE_BASE, iceAt = 0;
+  const hasTurn = () => iceServers.some((s) => [].concat(s.urls || []).some((u) => /^turns?:/.test(u)));
   async function refreshIce() {
     if (Date.now() - iceAt < 6 * 3600 * 1000) return;
     iceAt = Date.now() - 5.5 * 3600 * 1000; // bei Fehler in 30 Minuten wieder versuchen
@@ -352,8 +354,8 @@
       const list = (d && Array.isArray(d.iceServers) ? d.iceServers : []).map((s) => ({
         ...s, urls: [].concat(s.urls || []).filter((u) => typeof u === 'string' && /^(stun|turns?):/.test(u) && !/:53(\?|$)/.test(u)),
       })).filter((s) => s.urls.length);
+      if (!list.length) return; // noch kein TURN eingerichtet: in 30 Minuten wieder nachfragen
       iceAt = Date.now();
-      if (!list.length) return;
       iceServers = list;
       if (peer && peer.options) peer.options.config = { ...(peer.options.config || {}), iceServers };
     } catch {}
@@ -433,7 +435,9 @@
     connecting[code] = Date.now();
     setupConn(peer.connect(peerIdOf(code), { reliable: true }), true);
   }
-  function connectAll() { wantedCodes().forEach(connectTo); }
+  // Auch Chat-Verbindungen brauchen TURN, wenn sich die Geräte nicht direkt erreichen (sonst geht alles über den Briefkasten
+  // und der Online-Status bleibt aus). Darum den TURN-Zugang nicht erst beim ersten Anruf holen.
+  function connectAll() { refreshIce(); wantedCodes().forEach(connectTo); }
 
   function setupConn(conn, mine) {
     const code = codeOf(conn.peer);
@@ -684,7 +688,7 @@
         // Direkt UND über den Briefkasten antworten – falls die direkte Verbindung tot ist
         if (isFriend(code) || sharesGroup(code)) { const h = helloPayload(code); sendTo(code, h); relay.send(code, h).catch(() => {}); }
         break;
-      case 'call-end': case 'call-reject': case 'call-cam': case 'call-accept': case 'call-ping': case 'callmiss':
+      case 'call-end': case 'call-reject': case 'call-cam': case 'call-accept': case 'call-ping': case 'callmiss': case 'call-ring': case 'callring':
         calls.handle(code, data);
         break;
       case 'status': case 'sdel': case 'slist': case 'sget': case 'sreact': case 'sseen':
@@ -7701,11 +7705,14 @@
     function watchTracks(c) {
       c.local.getAudioTracks().forEach((t) => { t.onended = () => replaceAudio(c); });
     }
-    function senderFor(c, kind) {
-      const pc = c.mc && c.mc.peerConnection;
-      if (!pc) return null;
-      const tr = pc.getTransceivers ? pc.getTransceivers().find((t) => t.receiver && t.receiver.track && t.receiver.track.kind === kind) : null;
-      return tr ? tr.sender : pc.getSenders().find((s) => s.track && s.track.kind === kind) || null;
+    // Sender für Ton/Bild – in der Anruf-Verbindung und (solange es noch klingelt) in allen offenen Wählversuchen
+    function sendersFor(c, kind) {
+      return [...new Set([c.mc, ...(c.tries || [])])].filter(Boolean).map((mc) => {
+        const pc = mc.peerConnection;
+        if (!pc) return null;
+        const tr = pc.getTransceivers ? pc.getTransceivers().find((t) => t.receiver && t.receiver.track && t.receiver.track.kind === kind) : null;
+        return tr ? tr.sender : pc.getSenders().find((s) => s.track && s.track.kind === kind) || null;
+      }).filter(Boolean);
     }
     async function replaceAudio(c) {
       if (cur !== c) return;
@@ -7717,8 +7724,7 @@
       t.onended = () => replaceAudio(c);
       c.local.getAudioTracks().forEach((o) => c.local.removeTrack(o));
       c.local.addTrack(t);
-      const s = senderFor(c, 'audio');
-      if (s) { try { await s.replaceTrack(t); } catch (e) { console.warn('Mikrofon wechseln:', e); } }
+      for (const s of sendersFor(c, 'audio')) { try { await s.replaceTrack(t); } catch (e) { console.warn('Mikrofon wechseln:', e); } }
       toast('🎤 Mikrofon gewechselt');
     }
 
@@ -7739,34 +7745,74 @@
       try { [local, , peerOk] = await Promise.all([getStream(video), refreshIce(), ensurePeer(10000)]); }
       catch (e) { mediaError(e); if (cur === me_) { cur = null; keepAwake(false); closeUI(0); } return; }
       if (cur !== me_) { stopStream(local); return; } // inzwischen abgebrochen oder Gegenanruf angenommen
-      if (!peerOk) { end('unreachable'); return; }
-      connectTo(code); // jetzt, wo der Peer sicher verbunden ist
       cur.local = local;
+      if (!peerOk) { end('nonet'); return; } // eigene Verbindung zum Signal-Server fehlt (nicht: Freund nicht erreichbar)
+      connectTo(code); // jetzt, wo der Peer sicher verbunden ist
       watchTracks(cur);
       cur.camOn = video && local.getVideoTracks().length > 0;
       renderVideo(); renderButtons(); checkFlip();
       setState('Ruft an…');
-      const mc = peer && peer.open ? peer.call(peerIdOf(code), local, { metadata: { callId: cur.id, video } }) : null;
-      if (!mc) { end('unreachable'); return; }
-      bind(mc, cur);
+      if (!dial(cur)) { end('nonet'); return; }
       startTone(false);
-      cur.ringTimer = setTimeout(() => { if (cur === me_ && cur.state === 'calling') end('noanswer'); }, RING_MS);
+      // Nie geklingelt (keine Bestätigung von einer neuen Version)? Dann war der andere nicht erreichbar -> „verpasst“ per Push
+      cur.ringTimer = setTimeout(() => { if (cur === me_ && cur.state === 'calling') end(canRedial(code) && !me_.rang ? 'unreachable' : 'noanswer'); }, RING_MS);
+      // Neue Versionen bestätigen das Klingeln. Fehlt die Bestätigung, ist der Anruf vielleicht verloren gegangen
+      // (Handy des anderen kurz im Hintergrund, Server-Verbindung wurde gerade neu aufgebaut): dann erneut anrufen.
+      if (canRedial(code)) cur.redialTimer = setTimeout(() => redialCall(me_), REDIAL_MS);
       stats.calls = (stats.calls || 0) + 1;
       saveMeta(); checkAchievements();
     }
 
+    // ---------- Wählen ----------
+    // Solange es noch nicht angenommen ist, kann es mehrere Wählversuche geben (gleiche Anruf-ID). Der Versuch, den der
+    // andere annimmt, wird zur Verbindung des Anrufs; die anderen werden geschlossen.
+    const REDIAL_MS = 5000;
+    const canRedial = (code) => ((contacts[code] && contacts[code].v) || 1) >= 8; // ältere Versionen hielten einen zweiten Versuch für „besetzt“
+    function dial(c) {
+      if (!peer || !peer.open) return false;
+      const mc = peer.call(peerIdOf(c.code), c.local, { metadata: { callId: c.id, video: c.video } });
+      if (!mc) return false;
+      c.tries = (c.tries || []).concat(mc);
+      while (c.tries.length > 3) { const old = c.tries.shift(); try { old.close(); } catch {} } // nur die letzten drei offen halten
+      mc.on('stream', (remote) => {
+        if (cur !== c || c.mc) return; // schon ein anderer Versuch angenommen
+        const others = c.tries.filter((m) => m !== mc);
+        c.tries = [];
+        others.forEach((m) => { try { m.close(); } catch {} });
+        bind(mc, c);
+        gotStream(c, mc, remote);
+      });
+      mc.on('error', (e) => console.warn('Wählversuch:', e && (e.type || e.message)));
+      return true;
+    }
+    function redialCall(c) {
+      clearTimeout(c.redialTimer);
+      if (cur !== c || c.state !== 'calling' || c.rang || c.mc) return;
+      checkPeer(false); // Server-Verbindung tot? Dann zuerst neu anmelden
+      dial(c);
+      c.redialTimer = setTimeout(() => redialCall(c), REDIAL_MS);
+    }
+    function closeTries(c) {
+      (c.tries || []).forEach((m) => { try { m.close(); } catch {} });
+      c.tries = [];
+    }
+    // Zuletzt gesehene Anrufe: verhindert doppelte „verpasst“-Einträge und Geister-Anrufe nach dem Auflegen
+    const seenCalls = new Set(), endedCalls = new Set();
+    const remember = (set, id) => { if (!id) return; if (set.size > 200) set.clear(); set.add(id); };
+
     // Ereignisse einer Medienverbindung. Nach einem Wiederaufbau gibt es eine neue, die alte wird ignoriert.
+    function gotStream(c, mc, remote) {
+      if (cur !== c || c.mc !== mc) return;
+      c.remote = remote;
+      remote.onaddtrack = () => renderVideo();
+      if (c.state === 'calling') { connecting(c); armConnect(c); }
+      renderVideo();
+      mediaUp(c);
+    }
     function bind(mc, c) {
       c.mc = mc;
       const mine = () => cur === c && c.mc === mc;
-      mc.on('stream', (remote) => {
-        if (!mine()) return;
-        c.remote = remote;
-        remote.onaddtrack = () => renderVideo();
-        if (c.state === 'calling') { connecting(c); armConnect(c); }
-        renderVideo();
-        mediaUp(c);
-      });
+      mc.on('stream', (remote) => gotStream(c, mc, remote));
       // PeerJS schließt die Verbindung selbst, wenn ICE scheitert: dann neu aufbauen statt auflegen
       mc.on('close', () => { if (mine()) connLost(c); });
       mc.on('error', () => { if (mine()) connLost(c); });
@@ -7881,18 +7927,34 @@
         return;
       }
       connectTo(code); // Chat-Verbindung für Auflegen, Ablehnen, Kamera aus
+      // Hier schon beendet (abgelehnt, verpasst)? Ein später eintreffender Wählversuch darf nicht noch einmal klingeln
+      if (endedCalls.has(callId)) { closeSoon(); return; }
+      // Derselbe Anruf noch einmal: Der Anrufer wiederholt, weil unsere Klingel-Bestätigung (noch) nicht ankam
+      if (cur && cur.code === code && cur.id === callId && cur.dir === 'in') {
+        if (cur.state === 'ringing') {
+          const c = cur, old = c.mc;
+          c.mc = mc; // beim Annehmen den neuesten Versuch nehmen
+          mc.on('close', () => { if (cur === c && c.mc === mc && c.state === 'ringing') end('canceled'); });
+          try { if (old && old !== mc) old.close(); } catch {}
+          signal(code, { type: 'call-ring', callId });
+        } else closeSoon(); // schon angenommen: weitere Versuche nicht mehr nötig
+        return;
+      }
       // Beide rufen sich gleichzeitig an: nur der Anruf des kleineren Codes bleibt, der andere nimmt ihn an
       if (cur && cur.code === code && cur.dir === 'out' && cur.state === 'calling') {
         if (me.code < code) { closeSoon(); return; }
         const mine = cur;
         cur = null;
-        clearTimeout(mine.ringTimer); stopTone();
+        clearTimeout(mine.ringTimer); clearTimeout(mine.redialTimer); stopTone();
         try { if (mine.mc) mine.mc.close(); } catch {}
+        closeTries(mine);
+        remember(endedCalls, mine.id);
         const keep = mine.local && mine.video === !!meta.video ? mine.local : null;
         if (!keep) stopStream(mine.local);
+        remember(seenCalls, callId);
         cur = { id: callId, code, video: !!meta.video, dir: 'in', state: 'ringing', mc, local: keep, glare: true, muted: false, camOn: !!meta.video, facing: 'user', camIdx: 0 };
         const c = cur;
-        mc.on('close', () => { if (cur === c && c.state === 'ringing') end('canceled'); });
+        mc.on('close', () => { if (cur === c && c.mc === mc && c.state === 'ringing') end('canceled'); });
         openUI();
         accept();
         return;
@@ -7906,13 +7968,15 @@
         saveMeta(); scheduleRender();
         return;
       }
+      remember(seenCalls, callId);
       cur = { id: callId, code, video: !!meta.video, dir: 'in', state: 'ringing', mc, muted: false, camOn: !!meta.video, facing: 'user', camIdx: 0 };
       const c = cur;
       openUI();
       box.classList.add('ringing-in');
       setState(cur.video ? 'Videoanruf …' : 'Anruf …');
       startTone(true);
-      mc.on('close', () => { if (cur === c && cur.state === 'ringing') end('canceled'); });
+      signal(code, { type: 'call-ring', callId }); // dem Anrufer bestätigen: es klingelt wirklich
+      mc.on('close', () => { if (cur === c && c.mc === mc && cur.state === 'ringing') end('canceled'); });
       cur.ringTimer = setTimeout(() => { if (cur === c && cur.state === 'ringing') end('missed'); }, RING_MS + 5000);
       // Fenster nach vorne holen bzw. Benachrichtigung zeigen
       window.chatboxWindow.attention && window.chatboxWindow.attention();
@@ -7963,8 +8027,10 @@
       [c.ringTimer, c.lostTimer, c.connectTimer, c.resumeTimer, c.redialTimer].forEach(clearTimeout); clearInterval(c.tick);
       stopTone();
       keepAwake(false);
-      if (!['remote', 'canceled', 'rejected', 'busy', 'declined', 'unreachable'].includes(reason)) signal(c.code, { type: 'call-end', callId: c.id });
+      remember(endedCalls, c.id);
+      if (!['remote', 'canceled', 'rejected', 'busy', 'declined', 'unreachable', 'nonet'].includes(reason)) signal(c.code, { type: 'call-end', callId: c.id });
       try { if (c.mc) c.mc.close(); } catch {}
+      closeTries(c);
       stopStream(c.local);
       playAudioOnly(null);
       remoteEl.srcObject = null; localEl.srcObject = null;
@@ -7986,7 +8052,7 @@
           if (document.hidden || !document.hasFocus()) notify(nameOf(c.code), `Verpasster ${c.video ? 'Videoanruf' : 'Anruf'}`, { chatId, icon: contacts[c.code] && contacts[c.code].avatar });
         }
       } else {
-        const t = { rejected: 'abgelehnt', busy: 'besetzt', noanswer: 'nicht angenommen', unreachable: 'nicht erreichbar', hangup: 'abgebrochen', error: 'fehlgeschlagen', lost: 'Verbindung verloren' }[reason] || 'beendet';
+        const t = { rejected: 'abgelehnt', busy: 'besetzt', noanswer: 'nicht angenommen', unreachable: 'nicht erreichbar', hangup: 'abgebrochen', error: 'fehlgeschlagen', lost: 'Verbindung verloren', nonet: 'keine Internetverbindung' }[reason] || 'beendet';
         msg = `${kind} · ${t}`;
         shown = t.charAt(0).toUpperCase() + t.slice(1);
         // Nicht erreichbar / nicht angenommen: der andere soll den verpassten Anruf sehen (auch per Push)
@@ -8058,8 +8124,7 @@
       track.enabled = c.camOn;
       if (old) c.local.removeTrack(old);
       c.local.addTrack(track);
-      const sender = senderFor(c, 'video');
-      if (sender) { try { await sender.replaceTrack(track); } catch (e) { console.warn('Kamera wechseln:', e); } }
+      for (const sender of sendersFor(c, 'video')) { try { await sender.replaceTrack(track); } catch (e) { console.warn('Kamera wechseln:', e); } }
       // Neues Objekt erzwingen, damit das Vorschaubild neu startet
       localEl.srcObject = null;
       renderVideo();
@@ -8111,8 +8176,23 @@
           if (sameCall) { cur.remoteCam = !!data.on; renderVideo(); }
           break;
         case 'call-accept':
-          if (sameCall && cur.dir === 'out' && cur.state === 'calling') { connecting(cur); armConnect(cur); }
+          if (sameCall && cur.dir === 'out' && cur.state === 'calling') { cur.rang = true; connecting(cur); armConnect(cur); }
           break;
+        case 'call-ring': // Beim anderen klingelt es wirklich: nicht mehr neu wählen
+          if (sameCall && cur.dir === 'out' && cur.state === 'calling' && !cur.rang) {
+            cur.rang = true;
+            clearTimeout(cur.redialTimer);
+            setState('Klingelt …');
+          }
+          break;
+        case 'callring': { // Über den Briefkasten (mit Push): Jemand ruft an, während die App zu war
+          if (!isFriend(code) || cur || !data.callId || seenCalls.has(data.callId) || endedCalls.has(data.callId)) break;
+          const age = Date.now() - (Number(data.ts) || 0);
+          if (age < -60000 || age > RING_MS + 15000) break; // längst vorbei: „verpasst“ kommt separat
+          toast(`📞 ${nameOf(code)} ruft dich an …`);
+          connectTo(code); // der Anrufer wählt gleich noch einmal, dann klingelt es hier
+          break;
+        }
         case 'call-ping':
           // Der andere hat die Verbindung verloren: Gibt es den Anruf hier noch, ebenfalls neu aufbauen, sonst Bescheid geben
           if (sameCall && data.callId) startResume(cur);
@@ -8120,6 +8200,7 @@
           break;
         case 'callmiss': {
           if (!isFriend(code)) return;
+          if (data.callId && seenCalls.has(data.callId)) break; // hat hier geklingelt: „verpasst“ steht schon im Chat
           const chatId = 'u:' + code;
           systemMessage(chatId, `${kindText(!!data.video)} verpasst`);
           unread[chatId] = (unread[chatId] || 0) + 1;
@@ -8131,7 +8212,16 @@
     }
     // Freund war nicht erreichbar (PeerJS: peer-unavailable)
     function unavailable(code) {
-      if (cur && cur.dir === 'out' && cur.code === code && cur.state === 'calling' && cur.mc) end('unreachable');
+      const c = cur;
+      if (!c || c.dir !== 'out' || c.code !== code || c.state !== 'calling' || !(c.tries && c.tries.length)) return;
+      if (!canRedial(code)) { end('unreachable'); return; }
+      // Nicht beim Server angemeldet (App zu, Handy im Hintergrund): weiter wählen und einmal per Push Bescheid geben –
+      // öffnet der andere WhatsUp, klingelt es dort beim nächsten Wählversuch
+      if (!c.unreach) {
+        c.unreach = true;
+        if (!c.rang) setState('Wird erreicht …');
+        relay.send(code, { type: 'callring', callId: c.id, video: !!c.video, ts: Date.now() }, { push: true }).catch(() => {});
+      }
     }
     // App wird geschlossen oder neu geladen: richtig auflegen, damit der andere nicht ins Leere wartet
     window.addEventListener('pagehide', () => { if (cur) { if (cur.dir === 'in' && cur.state === 'ringing') decline(); else end('hangup'); } });
@@ -8670,9 +8760,9 @@
   //  - Pro Nachricht: Einmal-Schlüssel (ECDH) -> HKDF -> AES-256-GCM, Absender signiert alles
   const relay = (() => {
     const DEFAULT_URL = 'https://whatsup-relay.whatsup-relay.workers.dev';
-    const RELAY_TYPES = new Set(['msg', 'gmsg', 'ack', 'group', 'gleave', 'hello', 'status', 'sdel', 'sreact', 'sseen', 'callmiss', 'hreq', 'mact', 'read', 'firesave']);
+    const RELAY_TYPES = new Set(['msg', 'gmsg', 'ack', 'group', 'gleave', 'hello', 'status', 'sdel', 'sreact', 'sseen', 'callmiss', 'callring', 'hreq', 'mact', 'read', 'firesave']);
     // Push aufs Handy nur für echte Nachrichten und Reaktionen (Profil, Gruppen-Abgleich, Bestätigungen usw. still)
-    const PUSH_TYPES = new Set(['msg', 'gmsg', 'sreact', 'callmiss']);
+    const PUSH_TYPES = new Set(['msg', 'gmsg', 'sreact', 'callmiss', 'callring']); // callring: „ruft dich an“, wenn die App zu ist
     const te = new TextEncoder(), td = new TextDecoder();
     let ident = null;        // { signPriv, encPriv, signPub, encPub }
     let ready = false;

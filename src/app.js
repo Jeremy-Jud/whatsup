@@ -1225,12 +1225,15 @@
     const code = item.to;
     if (actBusy.has(item.aid) && !viaRelay) return;
     actBusy.add(item.aid);
+    const isMove = item.data.act === 'move';
     if (!viaRelay && isOnline(code) && sendTo(code, item.data)) {
-      setTimeout(() => { if (actOutbox.some((a) => a.aid === item.aid)) deliverAction(item, true); }, 15000);
+      // Keine Bestätigung? Dann zusätzlich über den Server (Spielzüge schneller, damit niemand ewig wartet)
+      setTimeout(() => { if (actOutbox.some((a) => a.aid === item.aid)) deliverAction(item, true); }, isMove ? 5000 : 8000);
       return;
     }
     if (!isOnline(code)) connectTo(code);
-    relay.send(code, item.data)
+    // Spielzüge über den Server mit Push: Die App des anderen holt sie dann sofort ab (statt erst beim nächsten Abruf)
+    relay.send(code, item.data, isMove ? { push: true } : {})
       .then((ok) => { if (ok) doneAction(item.aid); })
       .catch(() => {})
       .finally(() => actBusy.delete(item.aid)); // sonst später nochmal (Verbindung/Briefkasten wieder da)
@@ -1238,9 +1241,12 @@
   function doneAction(aid) {
     actBusy.delete(aid);
     const n = actOutbox.length;
+    const wasMove = actOutbox.some((a) => a.aid === aid && a.data.act === 'move');
     actOutbox = actOutbox.filter((a) => a.aid !== aid);
     if (actOutbox.length !== n) saveOutbox();
+    if (wasMove) scheduleRender(); // „Zug wird übertragen …“ ausblenden
   }
+  const movePending = (id) => actOutbox.some((a) => a.data.act === 'move' && a.data.id === id);
   // Wartende Aktionen erneut versuchen (neue Verbindung, Briefkasten-Abruf, Start)
   function flushActions(code) {
     actOutbox.filter((a) => !code || a.to === code).forEach((a) => deliverAction(a));
@@ -2979,7 +2985,16 @@
     const RPS = ['✊', '✋', '✌️'], RPS_NAME = ['Stein', 'Papier', 'Schere'];
     const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
     const ABC = 'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜ', HANG_RE = /^[A-ZÄÖÜ]{3,14}$/, HANG_MAX = 8;
-    const orphans = {}; // Züge, die vor der Spiel-Nachricht ankamen
+    // Züge, die vor der Spiel-Nachricht ankamen. Gespeichert, damit sie ein Neuladen überstehen (sonst hängt das Spiel).
+    const orphans = store.load('gameOrphans', {});
+    const saveOrphans = () => {
+      const cut = Date.now() - 7 * 24 * 3600 * 1000;
+      for (const k of Object.keys(orphans)) { orphans[k] = orphans[k].filter((x) => (x.at || 0) > cut); if (!orphans[k].length) delete orphans[k]; }
+      store.save('gameOrphans', orphans);
+    };
+    // Wem gehört Zug Nummer n? (Tic-Tac-Toe/4 gewinnt: abwechselnd, Galgenmännchen: immer der Ratende)
+    const ownerOf = (m, n) => (m.game.k === 'hang' ? m.game.vs : n % 2 ? m.game.vs : m.from);
+    const STEP_GAMES = ['ttt', 'c4', 'hang'];
     function valid(g, chatId, from) {
       if (!g || typeof g !== 'object' || !Object.hasOwn(KINDS, g.k)) return null;
       if (g.k === 'quiz') return { k: 'quiz' };
@@ -3147,17 +3162,29 @@
       }
       settle(m, chatId);
       saveChat(chatId); scheduleRender();
-      sendAction(chatId, { act: 'move', id: m.id, n, v });
+      // Alle eigenen bisherigen Züge mitschicken: Ging ein früherer Zug verloren, holt der andere ihn so nach
+      const mine = {};
+      if (STEP_GAMES.includes(m.game.k)) for (const [k, val] of Object.entries(m.mv || {})) if (ownerOf(m, Number(k)) === me.code) mine[k] = val;
+      sendAction(chatId, { act: 'move', id: m.id, n, v, ...(Object.keys(mine).length ? { all: mine } : {}) });
+    }
+    // Zug (und mitgeschickte frühere Züge) übernehmen; true = etwas Neues
+    function applyAll(m, from, n, v, all, chatId) {
+      let changed = apply(m, from, n, v, chatId);
+      if (all && typeof all === 'object' && STEP_GAMES.includes(m.game.k)) {
+        for (const [k, val] of Object.entries(all).slice(0, 42)) if (apply(m, from, Number(k), Number(val), chatId)) changed = true;
+      }
+      return changed;
     }
     function receive(chatId, from, data) {
       const id = String(data.id || '').slice(0, 64), n = Number(data.n), v = Number(data.v);
+      const all = data.all && typeof data.all === 'object' ? data.all : null;
       const m = findMsg(chatId, id);
       if (!m) {
         const k = chatId + '|' + id;
-        if (Object.keys(orphans).length < 200) (orphans[k] = orphans[k] || []).push({ from, n, v });
+        if (Object.keys(orphans).length < 200) { (orphans[k] = orphans[k] || []).push({ from, n, v, all, at: Date.now() }); saveOrphans(); }
         return;
       }
-      if (!apply(m, from, n, v, chatId)) return;
+      if (!applyAll(m, from, n, v, all, chatId)) return;
       const s = settle(m, chatId);
       saveChat(chatId); scheduleRender();
       if (from === me.code || !s.players.includes(me.code) || (activeChat === chatId && document.hasFocus())) return;
@@ -3177,7 +3204,8 @@
       const k = chatId + '|' + m.id, list = orphans[k];
       if (!list) return;
       delete orphans[k];
-      list.forEach((x) => apply(m, x.from, x.n, x.v, chatId));
+      saveOrphans();
+      list.forEach((x) => applyAll(m, x.from, x.n, x.v, x.all, chatId));
       settle(m, chatId);
     }
     const who = (c) => (c === me.code ? 'Du' : nameOf(c));
@@ -3313,9 +3341,31 @@
       else if (m.game.k === 'ttt' || m.game.k === 'c4') status = s.turn === me.code ? '👉 Du bist dran' : `${nameOf(s.turn)} ist dran …`;
       else if (m.game.k === 'hang') status = s.turn === me.code ? '👉 Tippe auf einen Buchstaben' : `${nameOf(s.turn)} rät …`;
       if (status) box.appendChild(el('div', 'game-status' + (s.done && s.winner === me.code ? ' won' : ''), status));
+      // Eigener Zug noch nicht beim anderen (bzw. im Briefkasten) angekommen
+      if (movePending(m.id)) box.appendChild(el('div', 'game-sub', '⏳ Dein Zug wird übertragen …'));
       if (s.done && meIn) box.appendChild(againBtn(chatId, m));
       return box;
     }
+
+    // Wartet man im offenen Chat auf den Zug des anderen und gibt es keine direkte Verbindung (Züge laufen dann
+    // über den Briefkasten-Server), alle paar Sekunden dort nachsehen statt nur jede Minute.
+    function waitingFor(chatId) {
+      const list = chats[chatId] || [], recent = Date.now() - 24 * 3600 * 1000;
+      for (let i = list.length - 1, seen = 0; i >= 0 && seen < 30; i--, seen++) {
+        const m = list[i];
+        if (!m.game || m.deleted || m.ts < recent || m.game.k === 'quiz') continue;
+        const s = state(m, chatId);
+        if (s.done || !s.players.includes(me.code)) continue;
+        if (m.game.k === 'rps') { if (s.picks[me.code] != null) return true; continue; }
+        if (s.turn && s.turn !== me.code) return true;
+      }
+      return false;
+    }
+    setInterval(() => {
+      if (!me || document.hidden || view !== 'viewChat' || !activeChat || !relay.ready()) return;
+      if (recipientsOf(activeChat).every(isOnline)) return; // direkt verbunden: Züge kommen sofort
+      if (waitingFor(activeChat)) relay.poll();
+    }, 4000);
     // Galgenmännchen: geheimes Wort wählen
     function askWord(chatId, vs) {
       openModal((box) => {

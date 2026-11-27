@@ -552,6 +552,15 @@ const CHALL_POOL = [
   { type: 'fire', goal: 7, points: 30 },
 ];
 const CHALL_TYPES = ['reel_sound', 'reel_post', 'reel_likes', 'comments', 'messages', 'fire'];
+// Punkte-Shop: was man mit Challenge-Punkten kaufen kann und was es kostet (eine Woche bringt etwa 60–85 Punkte).
+// Nicht im Shop: Challenge-Belohnungen (erspielt man) und Event-Belohnungen (gibt es nie wieder).
+const SHOP = {
+  'banner:sunset': 40, 'banner:ocean': 40, 'banner:neon': 40, 'banner:gold': 40, 'banner:galaxy': 40,
+  'frame:flames': 60, 'frame:galaxy': 60, 'frame:laurel': 60, 'frame:rainbow': 60, 'frame:diamond': 60,
+  'banner:aurora': 90, 'banner:lava': 90, 'banner:holo': 90,
+  'frame:orbit': 120, 'frame:blaze': 120, 'frame:aurora': 120, 'frame:bolt': 120,
+  'design:aurora': 150, 'design:coderain': 150, 'design:volcano': 150,
+};
 // Woche beginnt Montag 00:00 UTC
 const weekStart = (t = Date.now()) => { const d = new Date(t); const day = (d.getUTCDay() + 6) % 7; return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day); };
 const weekId = (t) => new Date(weekStart(t)).toISOString().slice(0, 10);
@@ -680,7 +689,8 @@ export class Reels {
       CREATE TABLE IF NOT EXISTS reports (reel TEXT, code TEXT, reason TEXT, ts INTEGER, PRIMARY KEY (reel, code));
       CREATE TABLE IF NOT EXISTS challenges (week TEXT PRIMARY KEY, list TEXT, custom INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS chall_done (week TEXT, cid TEXT, code TEXT, points INTEGER, ts INTEGER, PRIMARY KEY (week, cid, code));
-      CREATE TABLE IF NOT EXISTS chall_progress (week TEXT, code TEXT, sent INTEGER, fire INTEGER, PRIMARY KEY (week, code));`);
+      CREATE TABLE IF NOT EXISTS chall_progress (week TEXT, code TEXT, sent INTEGER, fire INTEGER, PRIMARY KEY (week, code));
+      CREATE TABLE IF NOT EXISTS shop_buys (code TEXT, item TEXT, price INTEGER, ts INTEGER, PRIMARY KEY (code, item));`);
     // Musik (aus der festen Auswahl in der App): welcher Track, ab welcher Sekunde
     // kind: 'video' oder 'photos' (Foto-Beitrag zum Wischen); photos = Anzahl; music_vol = Lautstärke der Musik (0..1)
     for (const col of ['music_id TEXT', 'music_start REAL', "kind TEXT DEFAULT 'video'", 'photos INTEGER DEFAULT 0', 'music_vol REAL']) { try { this.sql.exec(`ALTER TABLE reels ADD COLUMN ${col}`); } catch { /* gibt es schon */ } }
@@ -738,6 +748,13 @@ export class Reels {
     const tot = code ? this.one('SELECT COUNT(*) AS done, COALESCE(SUM(points), 0) AS points FROM chall_done WHERE code = ?', code) : { done: 0, points: 0 };
     return { week, ends: weekStart() + 7 * 86400000, custom, list: out, total: tot };
   }
+  // Punkte-Shop: verdient = Punkte aus geschafften Challenges, ausgegeben = Käufe; Kontostand liegt nur hier
+  shopFor(code) {
+    const earned = code ? this.one('SELECT COALESCE(SUM(points), 0) AS n FROM chall_done WHERE code = ?', code).n : 0;
+    const buys = code ? this.sql.exec('SELECT item, price FROM shop_buys WHERE code = ? ORDER BY ts', code).toArray() : [];
+    const spent = buys.reduce((s, r) => s + r.price, 0);
+    return { earned, spent, balance: earned - spent, owned: buys.map((r) => r.item), items: Object.entries(SHOP).map(([id, price]) => ({ id, price })) };
+  }
   // Ältere Apps (ohne ?v=2) kennen keine Foto-Beiträge – denen nur Videos zeigen
   kindSql(url) { return Number(url.searchParams.get('v')) >= 2 ? '' : " AND COALESCE(kind, 'video') = 'video'"; }
   // Signierte Aktion prüfen: text = "<aktion>|<code>|<ts>|<extra>"
@@ -775,6 +792,7 @@ export class Reels {
           return r ? json({ reel: this.pub(r, me) }) : fail(404, 'gone');
         }
         if (action === 'challenges') return json(this.challengesFor(me));
+        if (action === 'shop') return json(this.shopFor(me));
         if (action === 'challstats' && CODE_RE.test(arg || '')) { // Abzeichen im Profil
           const t = this.one('SELECT COUNT(*) AS done, COALESCE(SUM(points), 0) AS points FROM chall_done WHERE code = ?', arg);
           return json(t);
@@ -803,6 +821,18 @@ export class Reels {
         this.sql.exec(`INSERT INTO chall_progress (week, code, sent, fire) VALUES (?, ?, ?, ?)
           ON CONFLICT(week, code) DO UPDATE SET sent = MAX(sent, excluded.sent), fire = MAX(fire, excluded.fire)`, week, code, sent, fire);
         return json(this.challengesFor(code));
+      }
+      // Punkte-Shop: einen Artikel mit Challenge-Punkten kaufen (signiert)
+      if (action === 'shopbuy') {
+        const item = String(b.item || '');
+        const code = await this.signed(b, 'shopbuy', `|${item}`);
+        if (!code) return fail(403, 'forbidden');
+        if (!Object.prototype.hasOwnProperty.call(SHOP, item)) return fail(400, 'unknown item');
+        const before = this.shopFor(code);
+        if (before.owned.includes(item)) return json({ ...before, ok: true });
+        if (before.balance < SHOP[item]) return json({ ...before, ok: false, error: 'points' });
+        this.sql.exec('INSERT OR IGNORE INTO shop_buys (code, item, price, ts) VALUES (?, ?, ?, ?)', code, item, SHOP[item], Date.now());
+        return json({ ...this.shopFor(code), ok: true });
       }
       // Admin: Challenges dieser Woche ändern (neu würfeln, Sound festlegen, zurück auf automatisch)
       if (action === 'challadmin') {

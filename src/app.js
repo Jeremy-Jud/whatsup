@@ -13,6 +13,9 @@
   const MAX_MB = 25;                                              // max. Größe pro Bild/GIF
   const MAX_MEDIA = Math.ceil(MAX_MB * 1024 * 1024 * 4 / 3) + 64; // als Base64-Daten-URL
   const OLD_MAX_MEDIA = 10 * 1024 * 1024; // Grenze bis v1.10 – ältere Versionen lehnen Größeres ab
+  // Stimmeffekte für Sprachnachrichten: [ID, Emoji, Name]. '' = normale Stimme
+  const VOICE_FX = [['', '🙂', 'Normal'], ['helium', '🎈', 'Helium'], ['robot', '🤖', 'Roboter'], ['monster', '👹', 'Monster']];
+  const VOICE_FX_IDS = VOICE_FX.map((f) => f[0]).filter(Boolean);
   const PROTO = 8;                        // Protokoll-Version (3 = große Dateien bis 25 MB, 4 = Sprachnachrichten, 5 = Sticker, 6 = Videos, 7 = Dateien, 8 = Anrufe mit Klingel-Bestätigung)
   // GIF-Suche über GIPHY: kostenlosen API-Schlüssel unter https://developers.giphy.com erstellen und hier eintragen.
   // Leer = keine GIF-Suche (der GIF-Reiter im Emoji-Feld wird dann nicht angezeigt).
@@ -289,7 +292,8 @@
       if (typeof m.data !== 'string' || m.data.length > MAX_MEDIA || !AUDIO_RE.test(m.data.slice(0, 40))) return null;
       const dur = Math.round(Number(m.dur) * 10) / 10;
       const wave = Array.isArray(m.wave) ? m.wave.slice(0, 64).map((v) => Math.round(Math.max(0, Math.min(1, Number(v) || 0)) * 100) / 100) : [];
-      return { kind: 'audio', data: m.data, dur: dur > 0 && dur <= 3600 ? dur : 0, wave };
+      const fx = VOICE_FX_IDS.includes(m.fx) ? m.fx : '';
+      return { kind: 'audio', data: m.data, dur: dur > 0 && dur <= 3600 ? dur : 0, wave, ...(fx ? { fx } : {}) };
     }
     if (m.kind === 'video') {
       if (typeof m.data !== 'string' || m.data.length > MAX_MEDIA || !VIDEO_RE.test(m.data.slice(0, 40))) return null;
@@ -306,7 +310,7 @@
 
   // Was von einer Datei in der Nachricht gespeichert wird (die Daten selbst liegen in IndexedDB)
   const mediaMeta = (m) => (m.kind === 'file' ? { kind: 'file', name: m.name, size: m.size || 0, mime: m.mime || '' }
-    : m.kind === 'audio' ? { kind: 'audio', dur: m.dur || 0, wave: m.wave || [] }
+    : m.kind === 'audio' ? { kind: 'audio', dur: m.dur || 0, wave: m.wave || [], ...(m.fx ? { fx: m.fx } : {}) }
     : m.kind === 'video' ? { kind: 'video', w: m.w, h: m.h, dur: m.dur || 0, poster: m.poster || null }
     : { kind: m.kind, w: m.w, h: m.h });
 
@@ -1304,6 +1308,7 @@
     if (typeof data.aid === 'string') sendTo(from, { type: 'mack', aid: data.aid.slice(0, 64) });
     if (data.act === 'timer') { receiveTimer(chatId, from, data); return; }
     if (data.act === 'move') { minigames.receive(chatId, from, data); return; }
+    if (data.act === 'wheel') { minigames.wheelAct(chatId, from, data); return; }
     const id = String(data.id || '').slice(0, 64);
     const m = findMsg(chatId, id);
     if (data.act === 'del') {
@@ -2706,6 +2711,7 @@
       menu.appendChild(b);
     };
     act('Spiel', 'Tic-Tac-Toe, Schere, Stein, Papier, Quiz, 4 gewinnt …', '🎮', () => minigames.openNew(chatId));
+    act('Glücksrad', 'Wer zahlt? Welcher Film? Das Rad entscheidet', '🎡', () => minigames.openNew(chatId, 'wheel'));
     act('Nachricht planen', 'Später automatisch senden', '🕓', () => scheduled.openNew(chatId));
     if (chatId.startsWith('g:')) act('Umfrage', 'Alle in der Gruppe stimmen ab', '📊', openNewPoll);
     document.body.appendChild(back);
@@ -2961,6 +2967,7 @@
       ttt: { icon: '❌⭕', name: 'Tic-Tac-Toe' }, rps: { icon: '✊✋✌️', name: 'Schere, Stein, Papier' }, quiz: { icon: '💰', name: 'Millionen-Quiz' },
       c4: { icon: '🔴🟡', name: '4 gewinnt', pro: true }, hang: { icon: '🔤', name: 'Galgenmännchen', pro: true },
       kp: { icon: '🎨', name: 'Kritzelpost', pro: true, group: true }, // Gruppenspiel über den Spieleserver (siehe kritzel)
+      wheel: { icon: '🎡', name: 'Glücksrad' }, // fair ohne Server, siehe unten (Glücksrad)
     };
     const RPS = ['✊', '✋', '✌️'], RPS_NAME = ['Stein', 'Papier', 'Schere'];
     const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
@@ -2984,6 +2991,7 @@
         if (typeof g.key !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(g.key) || typeof g.j !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(g.j)) return null;
         return { k: 'kp', r: g.r, key: g.key, j: g.j, t: ['kurz', 'normal', 'lang'].includes(g.t) ? g.t : 'normal' };
       }
+      if (g.k === 'wheel') return wheelValid(g);
       if (typeof g.vs !== 'string' || !CODE_RE.test(g.vs) || g.vs === from) return null;
       if (chatId.startsWith('u:')) {
         if (g.vs !== (from === me.code ? chatId.slice(2) : me.code)) return null;
@@ -3019,9 +3027,10 @@
     }
     // Beim Quiz spielen alle mit, die im Chat sind
     const chatMembers = (chatId) => (chatId.startsWith('u:') ? [me.code, chatId.slice(2)] : ((groups[chatId.slice(2)] || {}).members || []).slice());
-    const players = (m, chatId) => (m.game.k === 'quiz' ? (chatId ? chatMembers(chatId) : []) : [m.from, m.game.vs]);
+    const players = (m, chatId) => (m.game.k === 'quiz' ? (chatId ? chatMembers(chatId) : []) : m.game.k === 'wheel' ? [] : [m.from, m.game.vs]);
     function state(m, chatId) {
       const mv = m.mv || {};
+      if (m.game.k === 'wheel') return { done: !!(m.wh && m.wh.r), winner: null, players: [], turn: null }; // kein Spiel mit Gewinner
       if (m.game.k === 'quiz') {
         const ps = players(m, chatId), res = {};
         for (const [c, v] of Object.entries(mv)) res[c] = v;
@@ -3084,7 +3093,7 @@
       return { board, n, winner, line, done, players: [x, o], turn: done ? null : (n % 2 ? o : x) };
     }
     function apply(m, from, n, v, chatId) {
-      if (!m.game || m.deleted || !Number.isInteger(v) || m.game.k === 'kp') return false;
+      if (!m.game || m.deleted || !Number.isInteger(v) || m.game.k === 'kp' || m.game.k === 'wheel') return false;
       m.mv = m.mv || {};
       if (m.game.k === 'quiz') {
         if (!chatMembers(chatId).includes(from) || !(v === 0 || quiz.LADDER.includes(v)) || m.mv[from] != null) return false;
@@ -3191,7 +3200,7 @@
       if (!list) return;
       delete orphans[k];
       saveOrphans();
-      list.forEach((x) => applyAll(m, x.from, x.n, x.v, x.all, chatId));
+      list.forEach((x) => (x.wheel ? wheelAct(chatId, x.from, x.wheel) : applyAll(m, x.from, x.n, x.v, x.all, chatId)));
       settle(m, chatId);
     }
     const who = (c) => (c === me.code ? 'Du' : nameOf(c));
@@ -3240,6 +3249,7 @@
       box.appendChild(el('div', 'game-title', `${KINDS[m.game.k].icon} ${KINDS[m.game.k].name}`));
       if (m.game.k === 'quiz') { quizView(chatId, m, box); return box; }
       if (m.game.k === 'kp') { kritzel.card(chatId, m, box); return box; }
+      if (m.game.k === 'wheel') { wheelView(chatId, m, box); return box; }
       const s = state(m), [x, o] = players(m), meIn = players(m).includes(me.code);
       if (m.game.k === 'c4') {
         box.appendChild(el('div', 'game-sub', `${who(x)} 🔴 · ${who(o)} 🟡`));
@@ -3384,10 +3394,163 @@
       }
       sendMessage(chatId, `🎮 ${KINDS[k].name}: ${me.name} fordert ${nameOf(vs)} heraus! (Zum Mitspielen WhatsUp aktualisieren)`, null, { game, noReply: true });
     }
-    function openNew(chatId) {
+    // ---------- Glücksrad ----------
+    // game = { k: 'wheel', q: Frage, o: [2–12 Felder], c: SHA-256 eines Geheimnisses r, das nur die App des Erstellers kennt }.
+    // Fair ohne Server: Jemand anderes im Chat dreht und schickt dabei eine Zufallszahl s. Erst dann verrät die App
+    // des Erstellers r, und das Feld ergibt sich aus SHA-256(r|s). r steht durch c schon vorher fest, und wer dreht,
+    // kennt r nicht – so kann niemand das Ergebnis aussuchen. Alle Apps prüfen SHA-256(r) === c.
+    // m.wh = { s, by: wer gedreht hat } und nach dem Auflösen zusätzlich { r, i: Feld, j: Stelle im Feld 0..1 }.
+    const WHEEL_MAX = 12, WHEEL_LEN = 24, WHEEL_Q = 60, WHEEL_SPIN_MS = 5200;
+    const HEX32 = /^[0-9a-f]{32}$/, HEX64 = /^[0-9a-f]{64}$/;
+    const WHEEL_COLORS = ['#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c', '#38d9a9', '#4dabf7', '#748ffc', '#da77f2', '#f783ac', '#a9e34b', '#3bc9db', '#ffc078'];
+    const wheelSecrets = store.load('wheelSecrets', {}); // c -> { r, at }
+    const spinAt = new Map(); // Nachricht -> seit wann das Rad auf diesem Gerät ausrollt
+    const spinEnd = new Map(); // Nachricht -> Timer bis zum Ergebnis
+    const revealing = new Set();
+    const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const sha256 = async (s) => toHex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)));
+    const rand16 = () => toHex(crypto.getRandomValues(new Uint8Array(16)));
+    const oneLine = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+    function wheelValid(g) {
+      if (typeof g.c !== 'string' || !HEX64.test(g.c) || !Array.isArray(g.o)) return null;
+      const o = g.o.slice(0, WHEEL_MAX).map((x) => oneLine(x, WHEEL_LEN)).filter(Boolean);
+      if (o.length < 2) return null;
+      return { k: 'wheel', q: oneLine(g.q, WHEEL_Q) || 'Glücksrad', o, c: g.c };
+    }
+    async function wheelCreate(chatId, q, opts) {
+      const r = rand16();
+      const game = wheelValid({ q, o: opts, c: await sha256(r) });
+      if (!game) return false;
+      const cut = Date.now() - 90 * 24 * 3600 * 1000;
+      for (const [k, v] of Object.entries(wheelSecrets)) if (!v || !(v.at > cut)) delete wheelSecrets[k];
+      wheelSecrets[game.c] = { r, at: Date.now() };
+      store.save('wheelSecrets', wheelSecrets);
+      sendMessage(chatId, `🎡 Glücksrad: ${game.q} (Zum Mitmachen WhatsUp aktualisieren)`, null, { game, noReply: true });
+      return true;
+    }
+    function wheelSpin(chatId, m) {
+      if (m.deleted || m.wh || m.from === me.code || !chatMembers(chatId).includes(me.code)) return;
+      m.wh = { s: rand16(), by: me.code };
+      saveChat(chatId); scheduleRender();
+      sendAction(chatId, { act: 'wheel', id: m.id, s: m.wh.s });
+    }
+    // Auflösung prüfen und übernehmen; true = neu
+    async function wheelSettle(chatId, m, s, by, r) {
+      if (!HEX32.test(s) || !HEX32.test(r) || by === m.from || !chatMembers(chatId).includes(by)) return false;
+      if ((await sha256(r)) !== m.game.c) return false;
+      const h = await sha256(r + '|' + s);
+      if (m.wh && m.wh.r) return false;
+      m.wh = { s, by, r, i: parseInt(h.slice(0, 8), 16) % m.game.o.length, j: 0.15 + 0.7 * (parseInt(h.slice(8, 12), 16) / 65535) };
+      spinAt.set(m.id, Date.now());
+      saveChat(chatId); scheduleRender();
+      return true;
+    }
+    // Die App des Erstellers löst auf, sobald jemand gedreht hat
+    async function wheelReveal(chatId, m) {
+      const sec = wheelSecrets[m.game.c];
+      if (m.from !== me.code || !m.wh || m.wh.r || !sec || revealing.has(m.id)) return;
+      revealing.add(m.id);
+      try {
+        const { s, by } = m.wh;
+        if (await wheelSettle(chatId, m, s, by, sec.r)) sendAction(chatId, { act: 'wheel', id: m.id, s, by, r: sec.r });
+      } finally { revealing.delete(m.id); }
+    }
+    async function wheelAct(chatId, from, data) {
+      const id = String(data.id || '').slice(0, 64);
+      const m = findMsg(chatId, id);
+      if (!m) {
+        const k = chatId + '|' + id;
+        if (Object.keys(orphans).length < 200) { (orphans[k] = orphans[k] || []).push({ from, wheel: { id, s: data.s, by: data.by, r: data.r }, at: Date.now() }); saveOrphans(); }
+        return;
+      }
+      if (!m.game || m.game.k !== 'wheel' || m.deleted) return;
+      const s = String(data.s || ''), r = String(data.r || '');
+      if (r) {
+        if (from !== m.from || !(await wheelSettle(chatId, m, s, String(data.by || ''), r))) return;
+        if (activeChat !== chatId || !document.hasFocus()) {
+          notify('🎡 Glücksrad', `${m.game.q}: ${m.game.o[m.wh.i]}`, { chatId, icon: contacts[from] && contacts[from].avatar });
+        }
+        return;
+      }
+      if (!HEX32.test(s) || from === m.from || !chatMembers(chatId).includes(from) || (m.wh && m.wh.r)) return;
+      if (!m.wh) { m.wh = { s, by: from }; saveChat(chatId); scheduleRender(); }
+      wheelReveal(chatId, m);
+    }
+    function wheelSvg(m, winner) {
+      const NS = 'http://www.w3.org/2000/svg', n = m.game.o.length, seg = 360 / n;
+      const mk = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
+      const pt = (a, rad) => `${(Math.sin(a * Math.PI / 180) * rad).toFixed(2)} ${(-Math.cos(a * Math.PI / 180) * rad).toFixed(2)}`;
+      const svg = mk('svg', { viewBox: '-106 -110 212 216', class: 'wheel-svg', 'aria-hidden': 'true' });
+      const rot = mk('g', { class: 'wheel-rot' });
+      const size = n <= 4 ? 13 : n <= 8 ? 11 : 9, max = n <= 6 ? 14 : 11;
+      m.game.o.forEach((label, i) => {
+        const a0 = i * seg, mid = a0 + seg / 2;
+        const color = WHEEL_COLORS[i % WHEEL_COLORS.length]; // höchstens 12 Felder = 12 Farben, nie zwei gleiche nebeneinander
+        rot.appendChild(mk('path', { d: `M0 0 L${pt(a0, 96)} A96 96 0 0 1 ${pt(a0 + seg, 96)} Z`, fill: color, class: i === winner ? 'win' : '' }));
+        // Schrift entlang des Radius; auf der linken Hälfte gedreht, damit sie nicht auf dem Kopf steht
+        const tf = mid > 180 ? `rotate(${(mid + 90).toFixed(2)}) translate(-60 0)` : `rotate(${(mid - 90).toFixed(2)}) translate(60 0)`;
+        const t = mk('text', { transform: tf, 'font-size': size });
+        t.textContent = label.length > max ? label.slice(0, max - 1) + '…' : label;
+        rot.appendChild(t);
+      });
+      rot.appendChild(mk('circle', { r: 96, class: 'wheel-rim' }));
+      svg.append(rot, mk('circle', { r: 11, class: 'wheel-hub' }), mk('path', { d: 'M-10 -108 L10 -108 L0 -86 Z', class: 'wheel-ptr' }));
+      return svg;
+    }
+    function wheelView(chatId, m, box) {
+      const g = m.game, wh = m.wh, seg = 360 / g.o.length;
+      const isMaker = m.from === me.code, member = chatMembers(chatId).includes(me.code);
+      const res = !!(wh && wh.r && Number.isInteger(wh.i) && wh.i < g.o.length);
+      const t0 = spinAt.get(m.id), elapsed = t0 ? Date.now() - t0 : Infinity;
+      const rolling = res && elapsed < WHEEL_SPIN_MS;
+      box.appendChild(el('div', 'wheel-q', g.q));
+      const wrap = el('div', 'wheel-wrap');
+      const svg = wheelSvg(m, res && !rolling ? wh.i : -1);
+      wrap.appendChild(svg);
+      box.appendChild(wrap);
+      const rot = svg.querySelector('.wheel-rot');
+      const final = res ? 360 * 6 - (wh.i + wh.j) * seg : 0;
+      if (rolling && rot.animate) {
+        const a = rot.animate([{ transform: 'rotate(0deg)' }, { transform: `rotate(${final}deg)` }],
+          { duration: WHEEL_SPIN_MS, easing: 'cubic-bezier(.15,.55,.12,1)', fill: 'forwards' });
+        a.currentTime = elapsed;
+      }
+      // Nach dem Ausrollen das Ergebnis zeigen (nach Uhrzeit, nicht nach der Animation: die steht in Tabs im Hintergrund still)
+      if (rolling && !spinEnd.has(m.id)) {
+        spinEnd.set(m.id, setTimeout(() => { spinEnd.delete(m.id); scheduleRender(); }, WHEEL_SPIN_MS - elapsed + 60));
+      }
+      if (res && !rolling) rot.style.transform = `rotate(${final}deg)`;
+      else if (wh && !res) wrap.classList.add('waiting'); // dreht, bis die Auflösung da ist
+      const did = (c) => `${who(c)} ${c === me.code ? 'hast' : 'hat'} gedreht`;
+      if (res && !rolling) {
+        box.appendChild(el('div', 'game-status won wheel-result', '🎉 ' + g.o[wh.i]));
+        box.appendChild(el('div', 'game-sub', did(wh.by)));
+        if (member && !m.deleted) {
+          const again = el('button', 'game-again', '🔁 Nochmal');
+          again.type = 'button';
+          again.onclick = (e) => { e.stopPropagation(); wheelCreate(chatId, g.q, g.o); };
+          box.appendChild(again);
+        }
+      } else if (rolling) box.appendChild(el('div', 'game-status', 'Das Rad dreht sich …'));
+      else if (wh) {
+        if (isMaker && !wheelSecrets[g.c]) box.appendChild(el('div', 'game-status', `${did(wh.by)} – öffne WhatsUp auf dem Gerät, auf dem du das Rad erstellt hast.`));
+        else box.appendChild(el('div', 'game-status', `${did(wh.by)} – ` + (isMaker ? 'gleich steht das Ergebnis fest …' : `warte auf ${nameOf(m.from)} …`)));
+        if (isMaker) queueMicrotask(() => wheelReveal(chatId, m));
+      } else if (isMaker) {
+        box.appendChild(el('div', 'game-sub', 'Jemand anderes im Chat dreht – so kann niemand schummeln, auch du nicht. 😉'));
+      } else if (member && !m.deleted) {
+        const b = el('button', 'game-again wheel-spin', '🎡 Drehen!');
+        b.type = 'button';
+        b.onclick = (e) => { e.stopPropagation(); wheelSpin(chatId, m); };
+        box.appendChild(b);
+      }
+      if (!res) box.appendChild(el('div', 'game-sub wheel-fair', '🔒 Fair: Niemand kann das Ergebnis vorher kennen oder aussuchen.'));
+    }
+
+    function openNew(chatId, first) {
       const isGroup = chatId.startsWith('g:');
       const opps = isGroup ? others(groups[chatId.slice(2)] || { members: [] }) : [chatId.slice(2)];
-      let kind = 'ttt', vs = isGroup ? null : opps[0], kpTimer = 'normal';
+      let kind = KINDS[first] ? first : 'ttt', vs = isGroup ? null : opps[0], kpTimer = 'normal';
       openModal((box) => {
         box.appendChild(el('h3', '', '🎮 Spiel starten'));
         const kinds = el('div', 'game-kinds');
@@ -3405,6 +3568,45 @@
           timers.appendChild(b);
         });
         kpNote.appendChild(timers);
+        // Glücksrad: Frage und Felder
+        const wheelNote = el('div', 'wheel-note hidden');
+        const wq = el('input', 'wheel-q-input');
+        wq.maxLength = WHEEL_Q; wq.placeholder = 'Frage, z. B. Wer zahlt? oder Welcher Film?';
+        const wo = el('textarea', 'wheel-opts');
+        wo.rows = 5; wo.placeholder = 'Ein Feld pro Zeile (2 bis 12)\nz. B.\nPizza\nSushi\nBurger';
+        const fill = el('button', 'ghost wheel-fill', isGroup ? '👥 Alle aus der Gruppe eintragen' : '👥 Uns beide eintragen');
+        fill.type = 'button';
+        fill.onclick = () => { wo.value = chatMembers(chatId).map(nameOf).join('\n'); if (!wq.value.trim()) wq.value = 'Wer ist dran?'; };
+        wheelNote.append(el('div', 'muted', 'Alle im Chat sehen das Rad. Jemand anderes dreht, und es rollt bei allen gleichzeitig aus.'), el('div', 'label', 'Frage'), wq, el('div', 'label', 'Felder'), wo, fill);
+        const err = el('div', 'status err');
+        const actions = buttons(['Abbrechen', 'ghost', closeModal], ['Herausfordern', 'primary', () => {
+          err.textContent = '';
+          if (kind === 'wheel') {
+            const opts = wo.value.split('\n').map((x) => oneLine(x, WHEEL_LEN)).filter(Boolean);
+            if (opts.length < 2) { err.textContent = 'Trage mindestens 2 Felder ein (eins pro Zeile).'; return; }
+            if (opts.length > WHEEL_MAX) { err.textContent = `Höchstens ${WHEEL_MAX} Felder.`; return; }
+            wheelCreate(chatId, wq.value, opts).then((ok) => { if (ok) closeModal(); else err.textContent = 'Das Glücksrad konnte nicht erstellt werden.'; },
+              () => { err.textContent = 'Das Glücksrad konnte nicht erstellt werden.'; });
+            return;
+          }
+          if ((kind === 'quiz' || kind === 'kp') && !opps.length) { err.textContent = 'In dieser Gruppe ist sonst niemand.'; return; }
+          if (kind === 'kp') {
+            kritzel.create(chatId, kpTimer).then(closeModal, (e) => { err.textContent = e.message || 'Spiel konnte nicht erstellt werden.'; });
+            return;
+          }
+          if (kind !== 'quiz' && !vs) { err.textContent = 'Wähle, gegen wen du spielst.'; return; }
+          closeModal();
+          start(chatId, kind, vs);
+        }]);
+        const go = actions.querySelector('.primary');
+        const show = () => {
+          pick.classList.toggle('hidden', kind === 'quiz' || kind === 'kp' || kind === 'wheel');
+          quizNote.classList.toggle('hidden', kind !== 'quiz');
+          kpNote.classList.toggle('hidden', kind !== 'kp');
+          wheelNote.classList.toggle('hidden', kind !== 'wheel');
+          go.textContent = kind === 'wheel' ? 'Senden' : 'Herausfordern';
+          err.textContent = '';
+        };
         Object.entries(KINDS).forEach(([k, d]) => {
           if (d.group && !isGroup) return;
           const b = el('button', 'game-kind' + (k === kind ? ' on' : '') + (d.pro ? ' pro-only' : ''));
@@ -3415,14 +3617,12 @@
             if (d.pro && !pro.isPro()) { pro.open(); return; }
             kind = k;
             kinds.querySelectorAll('.game-kind').forEach((x) => x.classList.toggle('on', x === b));
-            pick.classList.toggle('hidden', k === 'quiz' || k === 'kp');
-            quizNote.classList.toggle('hidden', k !== 'quiz');
-            kpNote.classList.toggle('hidden', k !== 'kp');
+            show();
           };
           kinds.appendChild(b);
         });
         box.appendChild(kinds);
-        box.appendChild(kpNote);
+        box.append(kpNote, wheelNote);
         if (isGroup) {
           pick.appendChild(el('div', 'label', 'Gegen wen?'));
           if (!opps.length) pick.appendChild(el('div', 'muted', 'In dieser Gruppe ist sonst niemand.'));
@@ -3436,20 +3636,9 @@
           });
           pick.appendChild(ul);
         } else pick.appendChild(el('div', 'muted', `Gegen ${nameOf(vs)}`));
-        box.append(pick, quizNote);
-        const err = el('div', 'status err');
-        box.appendChild(err);
-        box.appendChild(buttons(['Abbrechen', 'ghost', closeModal], ['Herausfordern', 'primary', () => {
-          if ((kind === 'quiz' || kind === 'kp') && !opps.length) { err.textContent = 'In dieser Gruppe ist sonst niemand.'; return; }
-          if (kind === 'kp') {
-            err.textContent = '';
-            kritzel.create(chatId, kpTimer).then(closeModal, (e) => { err.textContent = e.message || 'Spiel konnte nicht erstellt werden.'; });
-            return;
-          }
-          if (kind !== 'quiz' && !vs) { err.textContent = 'Wähle, gegen wen du spielst.'; return; }
-          closeModal();
-          start(chatId, kind, vs);
-        }]));
+        box.append(pick, quizNote, err, actions);
+        show();
+        if (kind === 'wheel') setTimeout(() => wq.focus(), 50);
       });
     }
 
@@ -3645,7 +3834,7 @@
       return { LADDER, TOP, money, running, open, repair };
     })();
 
-    return { valid, view, receive, adopt, openNew, state, name: (k) => (KINDS[k] || {}).name || 'Spiel' };
+    return { valid, view, receive, adopt, openNew, state, wheelAct, name: (k) => (KINDS[k] || {}).name || 'Spiel' };
   })();
 
   // ================= Kritzelpost (Gruppenspiel) =================
@@ -6167,10 +6356,97 @@
     const BARS = 40;
     let rec = null, stream = null, chunks = [], startT = 0, timer = null, chatId = null, cancelled = false;
     let actx = null, analyser = null, sampler = null, levels = [];
+    // Stimmeffekt: läuft live zwischen Mikrofon und Aufnahme, die Nachricht enthält schon die veränderte Stimme
+    let fxId = VOICE_FX_IDS.includes(store.load('voiceFx', '')) ? store.load('voiceFx', '') : '';
+    let micSrc = null, fxDest = null, fxChain = null, fxUsed = new Set();
 
     const pickType = () => ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']
       .find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
     const fmt = (s) => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+
+    // Tonhöhe ändern, ohne das Tempo zu ändern: zwei Verzögerungen, deren Länge gleichmässig wandert
+    // (kürzer = höher, länger = tiefer). Beim Zurückspringen ist die jeweilige Spur stumm, die andere übernimmt.
+    function pitchShift(ctx, ratio) {
+      const T = 0.08, len = Math.round(T * ctx.sampleRate), up = ratio > 1;
+      const ramp = ctx.createBuffer(1, len, ctx.sampleRate), fade = ctx.createBuffer(1, len, ctx.sampleRate);
+      const r = ramp.getChannelData(0), f = fade.getChannelData(0);
+      for (let i = 0; i < len; i++) { const p = i / len; r[i] = up ? 1 - p : p; f[i] = Math.sin(Math.PI * p) ** 2; }
+      const input = ctx.createGain(), output = ctx.createGain(), srcs = [];
+      const t0 = ctx.currentTime + 0.02;
+      for (const off of [0, T / 2]) {
+        const delay = ctx.createDelay(1);
+        delay.delayTime.value = 0;
+        const mod = ctx.createBufferSource(), depth = ctx.createGain();
+        mod.buffer = ramp; mod.loop = true; depth.gain.value = Math.abs(ratio - 1) * T;
+        mod.connect(depth); depth.connect(delay.delayTime);
+        const env = ctx.createBufferSource(), vca = ctx.createGain();
+        env.buffer = fade; env.loop = true; vca.gain.value = 0;
+        env.connect(vca.gain);
+        input.connect(delay); delay.connect(vca); vca.connect(output);
+        mod.start(t0, off); env.start(t0, off);
+        srcs.push(mod, env);
+      }
+      return { input, output, srcs };
+    }
+    function buildFx(ctx, id) {
+      const out = ctx.createGain();
+      let input = out, srcs = [];
+      if (id === 'helium' || id === 'monster') {
+        const ps = pitchShift(ctx, id === 'helium' ? 1.7 : 0.62);
+        const eq = ctx.createBiquadFilter();
+        if (id === 'helium') { eq.type = 'highpass'; eq.frequency.value = 180; }
+        else { eq.type = 'lowshelf'; eq.frequency.value = 220; eq.gain.value = 7; out.gain.value = 0.85; }
+        ps.output.connect(eq); eq.connect(out);
+        input = ps.input; srcs = ps.srcs;
+      } else if (id === 'robot') {
+        // Ringmodulator (Stimme × tiefer Ton) plus kurzes metallisches Echo
+        const ring = ctx.createGain(), osc = ctx.createOscillator();
+        ring.gain.value = 0; osc.frequency.value = 55; osc.connect(ring.gain); osc.start();
+        const echo = ctx.createDelay(0.1), fb = ctx.createGain();
+        echo.delayTime.value = 0.011; fb.gain.value = 0.45;
+        ring.connect(out); ring.connect(echo); echo.connect(fb); fb.connect(echo); echo.connect(out);
+        out.gain.value = 0.9;
+        input = ring; srcs = [osc];
+      }
+      return { input, output: out, stop: () => srcs.forEach((n) => { try { n.stop(); } catch {} }) };
+    }
+    function setFx(id) {
+      fxId = VOICE_FX_IDS.includes(id) ? id : '';
+      store.save('voiceFx', fxId);
+      syncFxBtns();
+      if (!actx || !micSrc || !fxDest) return;
+      if (fxChain) { try { micSrc.disconnect(fxChain.input); } catch {} fxChain.output.disconnect(); fxChain.stop(); }
+      fxChain = buildFx(actx, fxId);
+      micSrc.connect(fxChain.input);
+      fxChain.output.connect(fxDest);
+      if (fxId) fxUsed.add(fxId);
+    }
+    function syncFxBtns() {
+      document.querySelectorAll('#recFx button').forEach((b) => b.classList.toggle('on', b.dataset.fx === fxId));
+    }
+    VOICE_FX.forEach(([id, ic, name]) => {
+      const b = el('button', '', ic + ' ' + name);
+      b.type = 'button'; b.dataset.fx = id; b.title = 'Stimme: ' + name;
+      b.onclick = (e) => { e.preventDefault(); setFx(id); };
+      $('recFx').appendChild(b);
+    });
+    // Mikrofon -> (Effekt) -> Aufnahme. Klappt Web Audio nicht, wird das Mikrofon direkt (ohne Effekt) aufgenommen.
+    async function audioGraph() {
+      try {
+        actx = new AudioContext();
+        if (actx.state !== 'running') await Promise.race([actx.resume(), new Promise((r) => setTimeout(r, 400))]);
+        micSrc = actx.createMediaStreamSource(stream);
+        analyser = actx.createAnalyser();
+        analyser.fftSize = 1024;
+        micSrc.connect(analyser);
+        if (actx.state === 'running' && actx.createMediaStreamDestination) {
+          fxDest = actx.createMediaStreamDestination();
+          setFx(fxId);
+        }
+      } catch (e) { console.warn('Stimmeffekte nicht verfügbar', e); }
+      $('recFx').classList.toggle('hidden', !fxDest);
+      return fxDest ? fxDest.stream : stream;
+    }
 
     async function start() {
       if (rec || !activeChat) return;
@@ -6182,20 +6458,18 @@
         toast(e && e.name === 'NotAllowedError' ? '⚠️ Kein Zugriff aufs Mikrofon. Bitte in den Einstellungen erlauben.' : '⚠️ Kein Mikrofon gefunden.');
         return;
       }
+      fxUsed = new Set();
+      const recStream = await audioGraph();
       const type = pickType();
-      try { rec = new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: 48000 }); }
-      catch { rec = new MediaRecorder(stream); }
+      try { rec = new MediaRecorder(recStream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: 48000 }); }
+      catch { rec = new MediaRecorder(recStream); }
       chunks = []; levels = []; cancelled = false; chatId = activeChat;
       rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
       rec.onstop = finish;
       rec.start(250);
       startT = Date.now();
       // Lautstärke messen: für die Live-Anzeige und die Wellenform in der Nachricht
-      try {
-        actx = new AudioContext();
-        analyser = actx.createAnalyser();
-        analyser.fftSize = 1024;
-        actx.createMediaStreamSource(stream).connect(analyser);
+      if (analyser) {
         const buf = new Float32Array(analyser.fftSize);
         sampler = setInterval(() => {
           analyser.getFloatTimeDomainData(buf);
@@ -6203,7 +6477,7 @@
           levels.push(Math.sqrt(sum / buf.length));
           draw();
         }, 80);
-      } catch {}
+      }
       $('recBar').classList.remove('hidden');
       $('recTime').textContent = '0:00';
       timer = setInterval(() => {
@@ -6235,8 +6509,9 @@
     function cleanup() {
       clearInterval(timer); clearInterval(sampler);
       if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (fxChain) fxChain.stop();
       if (actx) actx.close().catch(() => {});
-      stream = null; actx = null; analyser = null;
+      stream = null; actx = null; analyser = null; micSrc = null; fxDest = null; fxChain = null;
       $('recBar').classList.add('hidden');
     }
     // Pegel auf feste Anzahl Balken (0..1) bringen
@@ -6254,6 +6529,7 @@
       const r = rec; rec = null;
       const dur = (Date.now() - startT) / 1000;
       const w = wave();
+      const fx = fxUsed.has(fxId) ? fxId : [...fxUsed][0] || ''; // für das Schild an der Nachricht
       cleanup();
       if (cancelled) return;
       if (dur < 0.8) { toast('Zu kurz'); return; }
@@ -6261,7 +6537,7 @@
         const type = ((r && r.mimeType) || (chunks[0] && chunks[0].type) || 'audio/webm').split(';')[0];
         const data = await readAsDataURL(new Blob(chunks, { type }));
         if (data.length > MAX_MEDIA) { toast('⚠️ Die Sprachnachricht ist zu lang.'); return; }
-        await sendMessage(chatId, '', { kind: 'audio', data, dur: Math.round(dur * 10) / 10, wave: w });
+        await sendMessage(chatId, '', { kind: 'audio', data, dur: Math.round(dur * 10) / 10, wave: w, ...(fx ? { fx } : {}) });
       } catch (e) { toast('⚠️ Sprachnachricht konnte nicht gesendet werden.'); console.error(e); }
     }
 
@@ -6305,6 +6581,8 @@
       const info = el('div', 'vinfo');
       const time = el('span', '', fmt(m.media.dur || 0));
       info.append(time);
+      const fxDef = m.media.fx && VOICE_FX.find((f) => f[0] === m.media.fx);
+      if (fxDef) info.append(el('span', 'vfx', fxDef[1] + ' ' + fxDef[2]));
       body.append(wv, info);
       const speed = el('button', 'vspeed', (player.id === m.id ? player.rate : 1) + '×');
       speed.type = 'button'; speed.title = 'Geschwindigkeit';

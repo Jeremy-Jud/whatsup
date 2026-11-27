@@ -32,25 +32,30 @@ const fromB64u = (s) => { s = String(s).replace(/-/g, '+').replace(/_/g, '/'); w
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 const freshTs = (ts) => Number.isFinite(ts) && Math.abs(Date.now() - ts) < CLOCK_SKEW;
 
-// Öffentlicher Signaturschlüssel eines Codes (vom Briefkasten-Server, kurz zwischengespeichert)
+// Öffentlicher Signaturschlüssel eines Codes (vom Briefkasten-Server, kurz zwischengespeichert).
+// Auf Cloudflare über die direkte Verbindung (Service Binding RELAY), beim lokalen Testen über RELAY_URL.
 async function signKeyOf(env, code, cache) {
   const hit = cache && cache.get(code);
   if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.key;
-  const r = await fetch(`${env.RELAY_URL}/v1/keys/${code}`).catch(() => null);
+  const path = `/v1/keys/${code}`;
+  let r = null;
+  if (env.RELAY) r = await env.RELAY.fetch(new Request('https://relay' + path)).catch(() => null);
+  if (!r || (!r.ok && r.status !== 404)) r = await fetch(env.RELAY_URL + path).catch(() => null);
   if (!r || !r.ok) return null;
   const k = (await r.json().catch(() => ({}))).sign;
   if (!k || typeof k.x !== 'string' || typeof k.y !== 'string') return null;
   if (cache) cache.set(code, { key: k, at: Date.now() });
   return k;
 }
-async function signedBy(env, code, text, sig, cache) {
-  if (!CODE_RE.test(code) || typeof sig !== 'string' || sig.length > 200) return false;
+// 'ok' = Signatur stimmt · 'nokey' = Code beim Briefkasten-Server nicht bekannt · 'bad' = Signatur falsch
+async function checkSig(env, code, text, sig, cache) {
+  if (!CODE_RE.test(code) || typeof sig !== 'string' || sig.length > 200) return 'bad';
   try {
     const k = await signKeyOf(env, code, cache);
-    if (!k) return false;
+    if (!k) return 'nokey';
     const key = await crypto.subtle.importKey('jwk', { kty: 'EC', crv: 'P-256', x: k.x, y: k.y, ext: true }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
-    return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, fromB64u(sig), te.encode(text));
-  } catch { return false; }
+    return (await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, fromB64u(sig), te.encode(text))) ? 'ok' : 'bad';
+  } catch { return 'bad'; }
 }
 
 export default {
@@ -65,7 +70,8 @@ export default {
       const code = String(b.code || '').toUpperCase(), ts = Number(b.ts);
       const timer = Object.hasOwn(TIMERS, b.timer) ? b.timer : 'normal';
       if (!CODE_RE.test(code) || !freshTs(ts) || !HASH_RE.test(String(b.joinHash || ''))) return json({ error: 'bad request' }, 400);
-      if (!(await signedBy(env, code, `kpnew|${code}|${ts}|${b.joinHash}|${timer}`, b.sig))) return json({ error: 'forbidden' }, 403);
+      const sig = await checkSig(env, code, `kpnew|${code}|${ts}|${b.joinHash}|${timer}`, b.sig);
+      if (sig !== 'ok') return json({ error: sig === 'nokey' ? 'nokey' : 'forbidden' }, 403);
       const id = env.GAMES.newUniqueId();
       const r = await env.GAMES.get(id).fetch('https://room/init', { method: 'POST', body: JSON.stringify({ creator: code, joinHash: b.joinHash, timer }) });
       if (!r.ok) return json({ error: 'init failed' }, 500);
@@ -144,7 +150,7 @@ export class GameRoom {
     let h;
     try { h = hex(await crypto.subtle.digest('SHA-256', fromB64(d.join))); } catch { return deny('auth'); }
     if (h !== m.joinHash) return deny('auth');
-    if (!(await signedBy(this.env, code, `kp|${code}|${this.ctx.id.toString()}|${ts}`, d.sig, this.keys))) return deny('auth');
+    if ((await checkSig(this.env, code, `kp|${code}|${this.ctx.id.toString()}|${ts}`, d.sig, this.keys)) !== 'ok') return deny('auth');
     ws.serializeAttachment({ code });
     this.send(ws, this.stateFor(code));
     if (m.phase === 'play') await this.sendTask(ws, code);

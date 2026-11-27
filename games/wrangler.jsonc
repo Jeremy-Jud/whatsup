@@ -10,8 +10,11 @@
     "bindings": [{ "name": "GAMES", "class_name": "GameRoom" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GameRoom"] }],
+  // Öffentliche Signaturschlüssel der Spieler kommen vom Briefkasten-Server. Direkte Verbindung (Service Binding):
+  // Worker desselben Kontos dürfen sich bei Cloudflare nicht über ihre workers.dev-Adressen aufrufen.
+  "services": [{ "binding": "RELAY", "service": "whatsup-relay" }],
   "vars": {
-    // Öffentliche Signaturschlüssel der Spieler kommen vom Briefkasten-Server
+    // Nur Ersatz, wenn es die direkte Verbindung nicht gibt (lokales Testen mit wrangler dev)
     "RELAY_URL": "https://whatsup-relay.whatsup-relay.workers.dev"
   }
 }

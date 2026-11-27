@@ -63,10 +63,23 @@ async function buildWindows() {
   const missing = updaterDeps.filter((d) => ![...files].some((f) => f.startsWith(`/node_modules/${d}/`)));
   if (missing.length) throw new Error('Im Paket fehlen Abhängigkeiten: ' + missing.join(', '));
 
-  // Installieren: nur Studio beenden, WhatsUp bleibt unberührt
-  spawnSync('taskkill', ['/IM', EXE_NAME, '/F'], { stdio: 'ignore' });
+  // Installieren: nur Studio beenden, WhatsUp bleibt unberührt. Erst weitermachen, wenn wirklich alle Studio-Prozesse
+  // weg sind – sonst sind Dateien noch gesperrt und der Installer bricht mit Code 2 ab (alte Version nicht entfernbar).
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const studioRunning = () => (spawnSync('tasklist', ['/FI', `IMAGENAME eq ${EXE_NAME}`, '/NH'], { encoding: 'utf8' }).stdout || '').toLowerCase().includes(EXE_NAME.toLowerCase());
+  spawnSync('taskkill', ['/IM', EXE_NAME, '/F', '/T'], { stdio: 'ignore' });
+  for (let i = 0; i < 40 && studioRunning(); i++) await sleep(250);
+  await sleep(1500); // Windows Zeit geben, die Dateien freizugeben
   console.log('WhatsUp Studio wird installiert …');
-  run(path.join(root, 'dist-studio', 'WhatsUp-Studio-Setup.exe'), ['/S']);
+  const setup = path.join(root, 'dist-studio', 'WhatsUp-Studio-Setup.exe');
+  for (let attempt = 1; ; attempt++) {
+    const r = spawnSync(setup, ['/S'], { cwd: root, stdio: 'inherit' });
+    if (r.status === 0) break;
+    if (attempt >= 3) throw new Error(`Installer ist fehlgeschlagen (Code ${r.status}). Ist WhatsUp Studio noch offen?`);
+    console.log(`Installer meldet Code ${r.status} – neuer Versuch in ein paar Sekunden …`);
+    spawnSync('taskkill', ['/IM', EXE_NAME, '/F', '/T'], { stdio: 'ignore' });
+    await sleep(4000);
+  }
   const exe = path.join(INSTALL_DIR, EXE_NAME);
   for (let i = 0; i < 60 && !fs.existsSync(exe); i++) await new Promise((r) => setTimeout(r, 500));
   if (!fs.existsSync(exe)) throw new Error('Installation nicht gefunden: ' + exe);

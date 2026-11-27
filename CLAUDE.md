@@ -31,4 +31,5 @@ WhatsUp Studio = gleiches WhatsUp mit violettem Logo, eigenem Test-Konto und eig
 ## Sonstiges
 
 - Briefkasten-Server (Offline-Zustellung, Push, TURN-Zugang): `relay/` (Cloudflare Worker „whatsup-relay“). TURN für Anrufe braucht die Secrets `TURN_KEY_ID` und `TURN_KEY_TOKEN` (Cloudflare Realtime) – die setzt der Nutzer selbst.
+- Spieleserver (Kritzelpost): `games/` (eigener Worker „whatsup-games“, Durable Object pro Spiel). Hochladen im Ordner `games/` mit `node ../relay/node_modules/wrangler/bin/wrangler.js deploy`. Er holt die Schlüssel der Spieler über ein Service Binding vom Briefkasten-Server (Worker desselben Kontos können sich nicht über workers.dev aufrufen). Studio und echte App nutzen denselben Spieleserver.
 - Tests: `npm test`. Web-Version bauen: `npm run build:web`.

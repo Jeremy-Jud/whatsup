@@ -8,3 +8,4 @@ dist-web-studio/
 
 relay/.wrangler/
 studio/.wrangler/
+games/.wrangler/

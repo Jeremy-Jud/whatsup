@@ -1,0 +1,6 @@
+{
+  "name": "whatsup-games",
+  "private": true,
+  "type": "module",
+  "description": "Spieleserver für WhatsUp (Kritzelpost). Hochladen mit wrangler aus relay/node_modules."
+}

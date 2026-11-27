@@ -197,10 +197,10 @@
           <div class="field">Banner um deinen Status<div id="bannerGrid" class="banner-grid"></div></div>
         </div>
       </details>
-      <!-- WhatsUp Pro: bar oder per Überweisung bezahlen, der Admin bestätigt -->
+      <!-- WhatsUp Pro: gratis ab 10'000 gesendeten Nachrichten (Erfolg „WhatsUp Pro“) -->
       <button type="button" class="pro-card" id="proCard">
         <span class="pro-ic">⭐</span>
-        <span class="pro-title">WhatsUp Pro<span class="muted pro-sub" id="proSub">Exklusive Designs, Rahmen, Spiele und mehr</span></span>
+        <span class="pro-title">WhatsUp Pro<span class="muted pro-sub" id="proSub">Gratis ab 10'000 Nachrichten</span></span>
         <span class="pers-arrow">›</span>
       </button>
       <!-- .group: Zeilen eines Abschnitts als Karte mit Trennlinien -->
@@ -290,9 +290,7 @@
         <div class="group">
           <div class="setting"><span>Nutzer von WhatsUp</span><span class="muted" id="adminCount">–</span></div>
           <div class="setting"><span class="muted">Name, Code und zuletzt aktiv</span><button id="adminUsersBtn" class="link">Alle anzeigen</button></div>
-          <div class="setting"><span>🛒 Einkäufe<span class="muted setting-sub" id="adminPurchCount">WhatsUp Pro</span></span><button id="adminPurchBtn" class="link">Öffnen</button></div>
           <div class="setting"><span>🎁 Geschenke<span class="muted setting-sub">Rahmen, Banner, Designs oder Pro verschenken</span></span><button id="adminGiftBtn" class="link">Senden</button></div>
-          <div class="setting"><span>💳 Zahlungsarten<span class="muted setting-sub" id="adminPayState">Bar oder Überweisung</span></span><button id="adminPayBtn" class="link">Ändern</button></div>
         </div>
       </div>
 
@@ -340,6 +338,8 @@
         </div>
       </div>
     </div>
+    <!-- WhatsUp Pro: gratis ab 10'000 gesendeten Nachrichten (Fortschritt, antippen öffnet die Pro-Seite) -->
+    <button type="button" id="achPro" class="ach-pro"></button>
     <div class="ach-summary">
       <span><span id="achCount">0</span> / <span id="achTotal">0</span></span>
       <div class="bar"><div id="achBar"></div></div>

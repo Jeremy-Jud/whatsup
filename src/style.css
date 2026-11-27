@@ -1328,13 +1328,33 @@ input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
 .pro-perks span.muted { font-size: 12px; }
 .pro-perk-ic { font-size: 20px; width: 28px; text-align: center; flex-shrink: 0; }
 .pro-body { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
-.pro-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; font-size: 13.5px; }
-.pro-steps li::marker { font-weight: 700; color: var(--accent); }
-.pro-code { display: flex; align-items: center; gap: 10px; margin-top: 6px; padding: 8px 12px; border-radius: 10px; background: var(--soft); width: fit-content; }
-.pro-code .code-sm { font-size: 16px; font-weight: 700; }
 .pro-state { padding: 10px 12px; border-radius: 12px; background: var(--soft); font-size: 13.5px; }
 .pro-state.ok { background: color-mix(in srgb, var(--online) 18%, transparent); }
-.pro-state.err { background: color-mix(in srgb, #e5484d 15%, transparent); }
+
+/* Fortschritt bis Pro (gesendete Nachrichten) */
+.pro-progress { display: flex; flex-direction: column; gap: 7px; }
+.pro-progress-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 13.5px; }
+.pro-progress-top b { font-variant-numeric: tabular-nums; }
+.pro-bar, .ach-pro-bar { flex: none; height: 8px; border-radius: 999px; background: var(--soft); }
+.pro-bar > div, .ach-pro-bar > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #ffc83d, #ff9f1c); }
+.pro-progress.done .pro-bar > div, .ach-pro.done .ach-pro-bar > span { box-shadow: 0 0 10px rgba(255, 200, 61, .7); }
+
+/* 🏆 Erfolge: Karte „WhatsUp Pro“ oben */
+.ach-pro {
+  flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; margin: 0 14px 10px; padding: 11px 12px; border-radius: 14px; text-align: left; color: var(--fg);
+  background: linear-gradient(120deg, color-mix(in srgb, #ffc83d 16%, var(--card)), color-mix(in srgb, #a855f7 14%, var(--card)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #ffc83d 30%, transparent);
+}
+.ach-pro:hover { filter: brightness(1.06); }
+.ach-pro.done { box-shadow: inset 0 0 0 1.5px #ffc83d; }
+.ach-pro-top { display: flex; align-items: center; gap: 10px; }
+.ach-pro-star { font-size: 22px; width: 28px; text-align: center; flex-shrink: 0; filter: drop-shadow(0 2px 8px rgba(255, 200, 61, .55)); }
+.ach-pro-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ach-pro-title b { font-size: 14px; font-weight: 650; }
+.ach-pro-title .muted { font-size: 11.5px; }
+.ach-pro-n { font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ach-list li.ach-pro-item.got .fname { color: #d69e00; }
+#viewAchievements:is([data-tab="lb"], [data-tab="chall"]) > .ach-pro { display: none; }
 
 /* Pro-Inhalte in den Auswahlen: ⭐ statt 🔒 */
 .frame-opt.pro-only.locked .frame-name::before { content: '⭐ '; }
@@ -1390,25 +1410,7 @@ input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
 .hang-key.hit:disabled { background: color-mix(in srgb, var(--online) 40%, transparent); opacity: .7; }
 .hang-input { text-transform: uppercase; letter-spacing: 2px; font-weight: 600; }
 
-/* Admin: Einkäufe */
-.purch-tabs { margin-top: 2px; }
-.purch-row { display: flex; align-items: center; gap: 10px; }
-.purch-row .fmeta { flex: 1; min-width: 0; }
-.purch-acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.purch-ok { padding: 6px 10px; border-radius: 10px; font-size: 12.5px; font-weight: 600; color: #fff; background: var(--online); }
-.purch-no { padding: 6px 10px; border-radius: 10px; font-size: 12.5px; font-weight: 700; color: #e5484d; background: color-mix(in srgb, #e5484d 14%, transparent); }
-.purch-gift { display: flex; align-items: center; gap: 8px; }
-.purch-gift input { flex: 1; text-transform: uppercase; letter-spacing: 1.5px; }
-.purch-gift input::placeholder, .hang-input::placeholder { text-transform: none; letter-spacing: normal; font-weight: 400; }
-.pro-pay-intro { font-weight: 600; font-size: 13.5px; }
-.pro-pay { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--soft); font-size: 13.5px; }
-.pro-pay-title { font-weight: 650; }
-.pro-pay-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.pro-pay-row > .muted { min-width: 82px; font-size: 12.5px; }
-.pro-pay-val { font-weight: 600; word-break: break-all; }
-.pro-pay-val.code-sm { font-size: 15px; }
-.pro-pay-row .link { margin-left: auto; font-size: 12.5px; }
-.pay-fields { display: flex; flex-direction: column; gap: 8px; margin: -2px 0 4px; }
+.hang-input::placeholder { text-transform: none; letter-spacing: normal; font-weight: 400; }
 
 /* ================= Geschenke ================= */
 .confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10000; }

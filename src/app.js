@@ -1608,28 +1608,38 @@
 
   // ================= Erfolge =================
   const ACH = window.CHATBOX_ACHIEVEMENTS;
+  // Dieser Erfolg (10'000 gesendete Nachrichten) schaltet WhatsUp Pro frei
+  const PRO_ACH = 'msg10000';
+  const PRO_GOAL = (ACH.find((a) => a.id === PRO_ACH) || { goal: 10000 }).goal;
+  const fmtN = (n) => String(Math.max(0, Math.floor(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, "'"); // 10'000 (überall gleich, auch auf dem iPhone)
   function statValue(key) {
     if (key === 'friends') return friendCodes().length;
     if (key === 'unlockedOthers') return ACH.filter((a) => a.id !== 'all' && unlocked[a.id]).length;
     return stats[key] || 0;
   }
   function checkAchievements() {
-    let changed = true, newOnes = false;
+    let changed = true, newOnes = false, proNow = false;
     while (changed) {
       changed = false;
       for (const a of ACH) {
         if (!unlocked[a.id] && statValue(a.stat) >= a.goal) {
           unlocked[a.id] = Date.now();
           changed = true;
-          toast(`${a.icon} Erfolg freigeschaltet: ${a.title}`, true);
+          if (a.id === PRO_ACH) proNow = true; // eigene Feier statt Toast (siehe pro.earnedNow)
+          else toast(`${a.icon} Erfolg freigeschaltet: ${a.title}`, true);
           newOnes = true;
         }
       }
     }
     saveMeta();
     if (newOnes) {
-      relay.reportAchievements();
+      const reported = relay.reportAchievements();
       broadcastProfile(); // Freunde sehen den neuen Erfolg in deinem Profil
+      if (proNow) {
+        pro.earnedNow();
+        // Das ⭐ prüfen Freunde beim Server: erst melden, dann nochmal Bescheid geben
+        Promise.resolve(reported).then(() => broadcastProfile(), () => {});
+      }
     }
   }
 
@@ -1852,24 +1862,27 @@
   const validBanner = (b) => (typeof b === 'string' && Object.prototype.hasOwnProperty.call(BANNERS, b) ? b : null);
 
   // ================= WhatsUp Pro =================
-  // Einmalig bar oder per Überweisung: Der Käufer meldet „Ich habe bezahlt“, der Admin bestätigt unter Du → Admin → Einkäufe.
-  // Ob jemand Pro ist, entscheidet der Server (die App merkt es sich, damit es auch offline gilt).
+  // Gratis, kein Geld: Wer 10'000 Nachrichten geschickt hat, bekommt den Erfolg „WhatsUp Pro“ (PRO_ACH) und damit Pro.
+  // Die App meldet den Erfolg wie alle Erfolge dem Server; der zählt Besitzer als Pro, damit Freunde das ⭐ sehen.
+  // Außerdem haben Pro: Admins und wer Pro vom Admin geschenkt bekam (Server-Status 'paid').
   // Pro bekommt nur Extras dazu, ohne Pro geht nichts verloren.
   const pro = (() => {
-    let mine = store.load('pro', { status: 'none' });   // none | pending | paid | rejected | revoked
+    let mine = store.load('pro', { status: 'none' });   // Server-Status: 'paid' = Pro geschenkt bekommen
     let others = store.load('proOthers', {});           // Code -> 1: Freunde mit Pro (für das ⭐)
-    let price = 2;
     // Admins haben Pro immer (wer Admin ist, sagt der Server).
-    // WhatsUp Studio: Jedes Konto hat Pro und das Admin-Panel. Was der Server erledigt (Nutzerliste, Käufe,
+    // WhatsUp Studio: Jedes Konto hat Pro und das Admin-Panel. Was der Server erledigt (Nutzerliste,
     // Geschenke …), klappt aber nur für Codes, die der Briefkasten-Server als Admin kennt (ADMIN_CODES/STUDIO_ADMIN_CODES).
     let admin = STUDIO || store.load('proAdmin', false), adminChecked = false;
-    const isPro = () => mine.status === 'paid' || admin;
+    const earned = () => !!unlocked[PRO_ACH];
+    const gifted = () => mine.status === 'paid';
+    const isPro = () => gifted() || admin || earned();
     const has = (code) => (me && code === me.code ? isPro() : !!others[code]);
+    const sentCount = () => Math.max(0, stats.sent || 0);
     const PERKS = [
       ['⭐', 'Pro-Abzeichen', 'Ein Stern neben deinem Namen, den alle sehen'],
       ['🎨', 'Exklusive Designs', 'Polarlicht, Code-Regen und Vulkan'],
       ['🖼️', 'Alle Rahmen & Banner', 'Dazu animierte Pro-Rahmen und -Banner'],
-      ['🎮', 'Neue Mini-Spiele', '4 gewinnt und Galgenmännchen'],
+      ['🎮', 'Neue Mini-Spiele', '4 gewinnt, Galgenmännchen und Kritzelpost starten'],
       ['🛟', 'Streak-Retter', 'Einmal im Monat einen verpassten Tag retten'],
     ];
     let drawOpen = null;
@@ -1879,9 +1892,8 @@
       const was = isPro();
       mine = { status, at: Date.now() };
       store.save('pro', mine);
-      if (!was && isPro()) { toast('⭐ Du bist jetzt WhatsUp Pro! Danke für deine Unterstützung.', true); broadcastProfile(); }
+      if (!was && isPro()) { toast('⭐ Du hast jetzt WhatsUp Pro!', true); broadcastProfile(); }
       if (was && !isPro()) lost();
-      if (status === 'rejected') toast('Deine Pro-Zahlung wurde nicht gefunden. Schreib dem Admin, falls du bezahlt hast.');
       renderRow(); scheduleRender();
       if (view === 'viewSettings') renderProfAvatar(); // Rahmen und Banner sofort (ent)sperren
       if (drawOpen) drawOpen();
@@ -2040,19 +2052,15 @@
       if (changed) { me.pv = Date.now(); saveMeta(); }
       broadcastProfile();
     }
-    // Status vom Server, dazu Preis und Zahlungsarten (bar / Überweisung) für die Pro-Seite
-    let busy = false, loaded = false, payInfo = null, cardOn = false;
+    // Status vom Server: geschenktes Pro, eingeforderte und offene Geschenke
+    let busy = false;
     async function refresh() {
       if (busy || !relay.ready()) return;
       busy = true;
       try {
         const d = await relay.pro.status();
-        if (d.price) price = d.price;
-        payInfo = d.pay || null;
-        cardOn = !!d.card;
         if (Array.isArray(d.owned)) setOwned(d.owned);
         if (Array.isArray(d.gifts)) queueGifts(d.gifts);
-        loaded = true;
         setMine(d.status);
         renderRow();
         if (drawOpen) drawOpen();
@@ -2078,157 +2086,125 @@
       s.title = 'WhatsUp Pro';
       return s;
     }
+    // Warum hat man Pro? (für die Texte)
+    const why = () => (admin ? 'admin' : earned() ? 'earned' : gifted() ? 'gift' : null);
+    const activeText = () => ({
+      admin: '✓ Aktiv (als Admin)',
+      earned: `✓ Aktiv · verdient mit ${fmtN(PRO_GOAL)} Nachrichten`,
+      gift: '✓ Aktiv · ein Geschenk vom Admin',
+    })[why()] || '';
+    // Zeile unter Du → WhatsUp Pro
     function renderRow() {
       const sub = $('proSub');
       if (!sub) return;
-      sub.textContent = admin && mine.status !== 'paid' ? '✓ Aktiv (als Admin)'
-        : isPro() ? '✓ Aktiv · danke für deine Unterstützung!'
-        : mine.status === 'pending' ? '⏳ Deine Zahlung wird geprüft'
-        : SOON ? 'Demnächst: exklusive Designs, Rahmen, Spiele und mehr'
-        : `Für ${price} CHF: exklusive Designs, Rahmen, Spiele und mehr`;
+      sub.textContent = isPro() ? activeText() : `Gratis ab ${fmtN(PRO_GOAL)} Nachrichten · du hast ${fmtN(sentCount())}`;
       $('proCard').classList.toggle('active', isPro());
     }
-
-    // Nach dem Öffnen der Stripe-Seite: 10 Minuten lang alle 5 Sekunden nachschauen
-    let cardT = 0;
-    function waitCard() {
-      clearInterval(cardT);
-      const until = Date.now() + 10 * 60000;
-      cardT = setInterval(() => { if (isPro() || Date.now() > until) { clearInterval(cardT); return; } refresh(); }, 5000);
+    // Fortschritt: gesendete Nachrichten bis PRO_GOAL
+    function progressEl(done) {
+      const n = Math.min(sentCount(), PRO_GOAL);
+      const wrap = el('div', 'pro-progress' + (done ? ' done' : ''));
+      const top = el('div', 'pro-progress-top');
+      top.append(el('span', '', '💬 Gesendete Nachrichten'), el('b', '', `${fmtN(n)} / ${fmtN(PRO_GOAL)}`));
+      const bar = el('div', 'bar pro-bar');
+      const fill = el('div');
+      fill.style.width = `${(n / PRO_GOAL) * 100}%`;
+      bar.appendChild(fill);
+      wrap.append(top, bar);
+      return wrap;
     }
-    // Vorschau „Demnächst“: Kaufen ist noch aus, man sieht nur, was kommt (zum Freischalten SOON = false setzen)
-    const SOON = true;
-    function teaser(first) {
-      openModal((box) => {
-        box.classList.add('pro-box');
-        const head = el('div', 'pro-head');
-        head.append(el('div', 'pro-head-star', '⭐'), el('h3', '', first ? 'Bald gibt es WhatsUp Pro!' : 'WhatsUp Pro'),
-          el('div', 'muted', 'Bald kannst du WhatsUp unterstützen und bekommst dafür Extras. Diese sind geplant:'));
-        box.appendChild(head);
-        const ul = el('ul', 'pro-perks');
-        PERKS.forEach(([ic, t, d]) => {
-          const li = el('li'), tx = el('div');
-          tx.append(el('b', '', t), el('span', 'muted', d));
-          li.append(el('span', 'pro-perk-ic', ic), tx);
-          ul.appendChild(li);
-        });
-        box.appendChild(ul);
-        const body = el('div', 'pro-body');
-        body.append(el('div', 'pro-state', '🚀 Demnächst verfügbar. Alles, was du heute hast, bleibt kostenlos.'), buttons([first ? 'Cool!' : 'Schließen', 'primary', closeModal]));
-        box.appendChild(body);
+    function perksEl() {
+      const ul = el('ul', 'pro-perks');
+      PERKS.forEach(([ic, t, d]) => {
+        const li = el('li'), tx = el('div');
+        tx.append(el('b', '', t), el('span', 'muted', d));
+        li.append(el('span', 'pro-perk-ic', ic), tx);
+        ul.appendChild(li);
       });
+      return ul;
     }
-    // Einmal nach dem Update: Hinweis, dass Pro bald kommt
-    function announce(tries = 0) {
-      if (!SOON || isPro() || store.load('proTeaserShown', false)) return;
-      // erst wissen, ob man Admin ist (Admins haben Pro schon)
-      if (relay.enabled() && !adminChecked && tries < 6) { setTimeout(() => announce(tries + 1), 5000); return; }
-      if (!$('modal').classList.contains('hidden')) { setTimeout(announce, 5000); return; }
-      store.save('proTeaserShown', true);
-      teaser(true);
-    }
-    function open() {
-      if (SOON && !isPro()) { teaser(false); return; }
+    // Pro-Seite: was es gibt und wie weit man ist.
+    // intro: einmal nach dem Update („jetzt gratis“). asUser: Vorschau ohne Pro (nur in WhatsUp Studio, zum Testen)
+    function open(opts = {}) {
+      const intro = !!opts.intro, asUser = !!opts.asUser;
       openModal((box) => {
         box.classList.add('pro-box');
         const head = el('div', 'pro-head');
-        head.append(el('div', 'pro-head-star', '⭐'), el('h3', '', 'WhatsUp Pro'),
-          el('div', 'muted', isPro() ? 'Danke, dass du WhatsUp unterstützt!' : `Einmalig ${price} CHF. Du unterstützt WhatsUp und bekommst Extras.`));
-        box.appendChild(head);
-        const ul = el('ul', 'pro-perks');
-        PERKS.forEach(([ic, t, d]) => {
-          const li = el('li'), tx = el('div');
-          tx.append(el('b', '', t), el('span', 'muted', d));
-          li.append(el('span', 'pro-perk-ic', ic), tx);
-          ul.appendChild(li);
-        });
-        box.appendChild(ul);
         const body = el('div', 'pro-body');
-        box.appendChild(body);
+        box.append(head, perksEl(), body);
         const draw = () => {
           if (!box.isConnected || !box.classList.contains('pro-box')) { drawOpen = null; return; }
-          body.replaceChildren();
-          if (isPro()) {
-            body.appendChild(el('div', 'pro-state ok', '✓ Pro ist aktiv. Alles ist freigeschaltet.'));
-            body.appendChild(buttons(['Schließen', 'primary', closeModal]));
-            return;
+          const on = isPro() && !asUser;
+          head.replaceChildren(el('div', 'pro-head-star', '⭐'), el('h3', '', intro ? 'WhatsUp Pro ist jetzt gratis!' : 'WhatsUp Pro'),
+            el('div', 'muted', on ? 'Alle Extras sind für dich freigeschaltet:'
+              : `Kein Geld, nur Nachrichten: Schick ${fmtN(PRO_GOAL)} Nachrichten und du bekommst alle Extras gratis.`));
+          body.replaceChildren(progressEl(on));
+          if (on) body.appendChild(el('div', 'pro-state ok', activeText()));
+          else {
+            const left = Math.max(0, PRO_GOAL - sentCount());
+            body.appendChild(el('div', 'pro-state', `Noch ${fmtN(left)} ${left === 1 ? 'Nachricht' : 'Nachrichten'}. Es zählt alles, was du schickst: in Chats und Gruppen, auch Bilder und Sprachnachrichten. Den Fortschritt siehst du jederzeit unter 🏆 Erfolge.`));
           }
-          if (mine.status === 'pending') {
-            body.appendChild(el('div', 'pro-state', '⏳ Danke! Der Admin prüft deine Zahlung und schaltet Pro dann frei. Das kann etwas dauern.'));
-            body.appendChild(buttons(['Neu prüfen', 'ghost', () => { refresh(); toast('Wird geprüft …'); }], ['Schließen', 'primary', closeModal]));
-            return;
-          }
-          if (!relay.ready()) {
-            body.appendChild(el('div', 'pro-state', 'Für WhatsUp Pro muss unter Offline-Zustellung „Über den Server zustellen“ eingeschaltet sein.'));
-            body.appendChild(buttons(['Schließen', 'primary', closeModal]));
-            return;
-          }
-          if (!loaded) { body.appendChild(el('div', 'muted center', 'Wird geladen …')); return; }
-          const pay = payInfo || {};
-          if (!pay.cash && !pay.iban && !cardOn) {
-            body.appendChild(el('div', 'pro-state', 'Der Admin hat noch keine Zahlungsart eingetragen. Schau später wieder vorbei.'));
-            body.appendChild(buttons(['Schließen', 'primary', closeModal]));
-            return;
-          }
-          if (mine.status === 'rejected') body.appendChild(el('div', 'pro-state err', 'Deine letzte Zahlung wurde nicht gefunden. Hast du deinen Code genannt bzw. in die Mitteilung geschrieben?'));
-          // Zeile „Bezeichnung: Wert [Kopieren]“
-          const line = (label, value, copy, cls = '') => {
-            const r = el('div', 'pro-pay-row');
-            r.append(el('span', 'muted', label), el('span', 'pro-pay-val' + (cls ? ' ' + cls : ''), value));
-            if (copy) {
-              const b = el('button', 'link', 'Kopieren');
-              b.type = 'button';
-              b.onclick = async () => { try { await navigator.clipboard.writeText(copy); toast(`${label} kopiert`); } catch { toast(copy); } };
-              r.appendChild(b);
-            }
-            return r;
-          };
-          body.appendChild(el('div', 'pro-pay-intro', `So bezahlst du ${price} CHF:`));
-          // Karte (Stripe): Bezahlseite im Browser, Pro wird nach der Zahlung automatisch freigeschaltet
-          if (cardOn) {
-            const c = el('div', 'pro-pay');
-            const go = el('button', 'primary', '💳 Mit Karte bezahlen');
-            go.type = 'button';
-            go.onclick = async () => {
-              go.disabled = true;
-              try { const d = await relay.pro.checkout(); window.open(d.url, '_blank'); waitCard(); toast('Bezahlseite geöffnet. Pro wird nach der Zahlung automatisch freigeschaltet.'); }
-              catch { toast('Die Bezahlseite konnte nicht geöffnet werden.'); }
-              go.disabled = false;
-            };
-            c.append(el('div', 'pro-pay-title', '💳 Karte'), el('div', 'muted', 'Sicher über Stripe. Pro ist sofort nach der Zahlung freigeschaltet.'), go);
-            body.appendChild(c);
-          }
-          if (pay.cash || pay.iban) body.appendChild(el('div', 'muted', 'Oder bar bzw. per Überweisung:'));
-          if (pay.cash) {
-            const c = el('div', 'pro-pay');
-            c.append(el('div', 'pro-pay-title', '💵 Bar'), el('div', '', pay.cashNote || `Gib dem Admin ${price} CHF bar.`), line('Sag dabei deinen Code', me.code, null, 'code-sm'));
-            body.appendChild(c);
-          }
-          if (pay.iban) {
-            const c = el('div', 'pro-pay');
-            c.append(el('div', 'pro-pay-title', '🏦 Überweisung'), line('Empfänger', pay.name), line('IBAN', pay.iban.replace(/(.{4})/g, '$1 ').trim(), pay.iban),
-              line('Betrag', `${Number(price).toFixed(2)} CHF`), line('Mitteilung', me.code, me.code, 'code-sm'));
-            body.appendChild(c);
-          }
-          const err = el('div', 'status err');
-          if (!pay.cash && !pay.iban) { body.append(err, buttons(['Schließen', 'ghost', closeModal])); return; }
-          body.appendChild(el('div', 'muted', 'Tippe nach dem Bezahlen auf „Ich habe bezahlt“. Sobald der Admin deine Zahlung bestätigt, ist Pro freigeschaltet.'));
-          body.appendChild(err);
-          const acts = buttons(['Abbrechen', 'ghost', closeModal], ['Ich habe bezahlt', 'primary', async () => {
-            if (!relay.ready()) { err.textContent = 'Dafür muss unter Offline-Zustellung „Über den Server zustellen“ eingeschaltet sein.'; return; }
-            const b = acts.querySelector('.primary');
-            b.disabled = true;
-            try { setMine((await relay.pro.request()).status || 'pending'); draw(); }
-            catch { err.textContent = 'Das hat nicht geklappt. Bitte später nochmal versuchen.'; b.disabled = false; }
-          }]);
-          body.appendChild(acts);
+          const btns = [];
+          if (STUDIO && !asUser) btns.push(['👀 Ohne Pro ansehen', 'ghost', () => open({ intro: true, asUser: true })]);
+          if (view !== 'viewAchievements') btns.push(['🏆 Erfolge', 'ghost', () => { closeModal(); showAchievements(); }]);
+          btns.push([intro ? 'Cool!' : 'Schließen', 'primary', closeModal]);
+          body.appendChild(buttons(...btns));
         };
         drawOpen = draw;
         draw();
-        refresh();
+        if (!asUser) refresh();
       });
     }
-    return { queueLocal: (g) => queueGifts([g]), isPro, has, star, open, announce, setAdmin, checkAdmin, hasDesign, ownedList: () => [...owned], isAdmin: () => admin, refresh, refreshOthers, refreshOthersSoon, renderRow, status: () => mine.status };
+    // Einmal nach dem Update: „WhatsUp Pro ist jetzt gratis“ (nur für alle, die Pro noch nicht haben)
+    function announce(tries = 0) {
+      if (isPro() || store.load('proFreeShown', false)) return;
+      // erst wissen, ob man Admin ist (Admins haben Pro schon)
+      if (relay.enabled() && !adminChecked && tries < 6) { setTimeout(() => announce(tries + 1), 5000); return; }
+      if (!$('modal').classList.contains('hidden') || view === 'viewSetup') { setTimeout(() => announce(6), 5000); return; }
+      store.save('proFreeShown', true);
+      open({ intro: true });
+    }
+    // 10'000 Nachrichten geschafft (aus checkAchievements): alles entsperren und feiern
+    let celebT = 0;
+    function earnedNow() {
+      toast('⭐ Erfolg freigeschaltet: WhatsUp Pro', true);
+      renderRow(); scheduleRender();
+      if (view === 'viewSettings') renderProfAvatar(); // Rahmen und Banner sofort entsperren
+      if (view === 'viewAchievements') renderAchievements();
+      if (drawOpen) drawOpen();
+      if (!admin && !gifted()) celebrate(); // wer Pro schon hatte, bekommt nur den Toast
+    }
+    // Feier mit Konfetti, sobald nichts anderes offen ist (kein Fenster, kein Anruf, App sichtbar)
+    function celebrate() {
+      clearTimeout(celebT);
+      if (!$('modal').classList.contains('hidden') || view === 'viewSetup' || calls.active() || document.hidden) { celebT = setTimeout(celebrate, 4000); return; }
+      openModal((box) => {
+        box.classList.add('pro-box');
+        const head = el('div', 'pro-head');
+        head.append(el('div', 'pro-head-star', '⭐'), el('h3', '', 'Du hast WhatsUp Pro!'),
+          el('div', 'muted', `${fmtN(PRO_GOAL)} Nachrichten, Wahnsinn! Dafür gehören dir jetzt alle Pro-Extras, gratis:`));
+        const body = el('div', 'pro-body');
+        body.append(progressEl(true), buttons(['Los geht’s', 'primary', closeModal]));
+        box.append(head, perksEl(), body);
+      });
+      confetti();
+    }
+    // Karte oben unter 🏆 Erfolge: Fortschritt bis WhatsUp Pro (antippen öffnet die Pro-Seite)
+    function renderAch(card) {
+      if (!card) return;
+      const on = isPro(), n = Math.min(sentCount(), PRO_GOAL);
+      card.classList.toggle('done', on);
+      const title = el('span', 'ach-pro-title');
+      title.append(el('b', '', 'WhatsUp Pro'), el('span', 'muted', on ? activeText() : `Gratis ab ${fmtN(PRO_GOAL)} gesendeten Nachrichten`));
+      const top = el('span', 'ach-pro-top');
+      top.append(el('span', 'ach-pro-star', '⭐'), title, el('span', 'ach-pro-n', `${fmtN(n)} / ${fmtN(PRO_GOAL)}`));
+      const bar = el('span', 'bar ach-pro-bar');
+      const fill = el('span');
+      fill.style.width = `${(n / PRO_GOAL) * 100}%`;
+      bar.appendChild(fill);
+      card.replaceChildren(top, bar);
+    }
+    return { queueLocal: (g) => queueGifts([g]), isPro, has, star, open, announce, setAdmin, checkAdmin, hasDesign, ownedList: () => [...owned], isAdmin: () => admin, refresh, refreshOthers, refreshOthersSoon, renderRow, renderAch, earnedNow };
   })();
 
   // ================= Gemeinschafts-Event: Weihnachten 2026 =================
@@ -4648,16 +4624,17 @@
     $('achCount').textContent = done;
     $('achTotal').textContent = ACH.length;
     $('achBar').style.width = (done / ACH.length) * 100 + '%';
+    pro.renderAch($('achPro')); // oben: Fortschritt bis WhatsUp Pro
     const ul = $('achList');
     ul.replaceChildren();
     [...ACH].sort((a, b) => (unlocked[b.id] ? 1 : 0) - (unlocked[a.id] ? 1 : 0)).forEach((a) => {
       const got = !!unlocked[a.id];
-      const li = el('li', got ? 'got' : '');
+      const li = el('li', (got ? 'got' : '') + (a.id === PRO_ACH ? ' ach-pro-item' : ''));
       li.appendChild(el('span', 'ach-icon', a.icon));
       const body = el('div', 'fmeta');
       body.appendChild(el('div', 'fname', a.title));
       const v = Math.min(statValue(a.stat), a.goal);
-      const extra = got ? new Date(unlocked[a.id]).toLocaleDateString('de-DE') : a.goal > 1 ? `${v}/${a.goal}` : '';
+      const extra = got ? new Date(unlocked[a.id]).toLocaleDateString('de-DE') : a.goal > 1 ? `${fmtN(v)}/${fmtN(a.goal)}` : '';
       body.appendChild(el('div', 'flast', a.desc + (extra ? ' · ' + extra : '')));
       li.appendChild(body);
       ul.appendChild(li);
@@ -5210,168 +5187,14 @@
     $('adminSection').classList.remove('hidden');
     // Studio: Panel immer da. Kennt der Server diesen Code (noch) nicht als Admin, sagen wir es statt stiller Fehler.
     $('adminStudioHint').classList.toggle('hidden', isAdm || !relay.ready());
-    $('adminStudioHint').textContent = `Studio: Der Server kennt ${me.code} noch nicht als Admin – Nutzerliste, Einkäufe und Geschenke gehen erst, wenn der Code eingetragen ist.`;
+    $('adminStudioHint').textContent = `Studio: Der Server kennt ${me.code} noch nicht als Admin – Nutzerliste und Geschenke gehen erst, wenn der Code eingetragen ist.`;
     if (!isAdm) { $('adminCount').textContent = 'nur für eingetragene Admins'; return; }
     $('adminCount').textContent = 'wird geladen…';
-    loadPurchases().catch(() => { $('adminPurchCount').textContent = 'nicht erreichbar'; });
     try {
       adminData = await relay.adminUsers();
       $('adminCount').textContent = `${adminData.count} · ${adminData.active24h} heute aktiv`;
     } catch { $('adminCount').textContent = 'nicht erreichbar'; }
   }
-
-  // ---------- Admin: Einkäufe (WhatsUp Pro, bar oder per Überweisung) ----------
-  let purchData = null;
-  const PURCH_STATUS = { confirm: 'paid', reject: 'rejected', revoke: 'revoked' };
-  function purchCount(d) {
-    const paid = d.purchases.filter((p) => p.status === 'paid').length;
-    $('adminPurchCount').textContent = (d.pending ? `🔴 ${d.pending} offen · ` : 'Nichts offen · ') + `${paid} bestätigt`;
-    $('adminPayState').textContent = payText(d.pay);
-  }
-  async function loadPurchases() { purchData = await relay.pro.purchases(); purchCount(purchData); return purchData; }
-  function openAdminPurchases() {
-    openModal((box) => {
-      box.classList.add('admin-box');
-      box.appendChild(el('h3', '', '🛒 Einkäufe'));
-      box.appendChild(el('div', 'muted', `WhatsUp Pro für ${(purchData && purchData.price) || 2} CHF. Vergleiche mit deinen Zahlungen (bar oder Überweisung mit Code in der Mitteilung) und bestätige oder lehne ab.`));
-      const TABS = [['pending', 'Offen'], ['paid', 'Bestätigt'], ['rejected', 'Abgelehnt']];
-      const inTab = (p, k) => (k === 'rejected' ? p.status === 'rejected' || p.status === 'revoked' : p.status === k);
-      let tab = 'pending';
-      const tabs = el('div', 'segmented purch-tabs');
-      const ul = el('ul', 'members admin-list purch-list');
-      const draw = () => {
-        const d = purchData;
-        tabs.replaceChildren(...TABS.map(([k, label]) => {
-          const n = d ? d.purchases.filter((p) => inTab(p, k)).length : 0;
-          const b = el('button', tab === k ? 'active' : '', label + (n ? ` (${n})` : ''));
-          b.type = 'button';
-          b.onclick = () => { tab = k; draw(); };
-          return b;
-        }));
-        ul.replaceChildren();
-        if (!d) { ul.appendChild(el('li', 'muted', 'Wird geladen …')); return; }
-        const list = d.purchases.filter((p) => inTab(p, tab));
-        if (!list.length) ul.appendChild(el('li', 'muted', { pending: 'Keine offenen Einkäufe.', paid: 'Noch niemand bestätigt.', rejected: 'Nichts abgelehnt.' }[tab]));
-        list.forEach((p) => {
-          const li = el('li', 'purch-row');
-          const c = contacts[p.code];
-          li.appendChild(avatarEl(p.name || p.code, c && c.avatar, p.code, '', null, c && c.frame));
-          const when = p.status === 'pending' ? 'gemeldet ' + agoText(p.requested)
-            : ({ paid: 'bestätigt ', rejected: 'abgelehnt ', revoked: 'entzogen ' }[p.status] || '') + agoText(p.decided || p.requested);
-          const meta = el('div', 'fmeta');
-          meta.append(el('div', 'fname', p.name || 'Unbekannt'), el('div', 'flast', `${p.code} · ${when}`));
-          li.appendChild(meta);
-          const acts = el('div', 'purch-acts');
-          const act = (label, cls, action, ask) => {
-            const b = el('button', cls, label);
-            b.type = 'button';
-            b.onclick = async (e) => {
-              e.stopPropagation();
-              if (ask && !confirm(ask)) return;
-              b.disabled = true;
-              try {
-                await relay.pro.decide(p.code, action);
-                p.status = PURCH_STATUS[action]; p.decided = Date.now();
-                d.pending = d.purchases.filter((x) => x.status === 'pending').length;
-                purchCount(d);
-                toast(action === 'confirm' ? `⭐ ${p.name || p.code} ist jetzt Pro` : action === 'reject' ? 'Abgelehnt' : 'Pro entzogen');
-                draw();
-              } catch { toast('Das hat nicht geklappt'); b.disabled = false; }
-            };
-            return b;
-          };
-          if (p.status === 'pending') acts.append(act('✓ Bestätigen', 'purch-ok', 'confirm'), act('✕', 'purch-no', 'reject', `Zahlung von ${p.name || p.code} ablehnen?`));
-          else if (p.status === 'paid') acts.append(act('Entziehen', 'link muted-link', 'revoke', `WhatsUp Pro von ${p.name || p.code} wirklich entziehen?`));
-          else acts.append(act('Doch bestätigen', 'link', 'confirm'));
-          li.appendChild(acts);
-          ul.appendChild(li);
-        });
-      };
-      box.append(tabs, ul);
-      // Pro direkt freischalten (z. B. verschenken oder Barzahlung)
-      const gift = el('form', 'purch-gift');
-      const inp = el('input');
-      inp.placeholder = 'Code direkt freischalten'; inp.maxLength = 6; inp.autocomplete = 'off'; inp.spellcheck = false;
-      const gb = el('button', 'link', 'Freischalten');
-      gb.type = 'submit';
-      gift.append(inp, gb);
-      gift.onsubmit = async (e) => {
-        e.preventDefault();
-        const code = inp.value.trim().toUpperCase();
-        if (!CODE_RE.test(code)) { toast('Ein Code hat genau 6 Zeichen'); return; }
-        try { await relay.pro.decide(code, 'confirm'); inp.value = ''; toast(`⭐ ${nameOf(code)} ist jetzt Pro`); await loadPurchases(); tab = 'paid'; draw(); }
-        catch { toast('Das hat nicht geklappt'); }
-      };
-      box.append(gift, buttons(['Schließen', 'primary', closeModal]));
-      draw();
-      loadPurchases().then(draw).catch(() => ul.replaceChildren(el('li', 'muted', 'Server nicht erreichbar.')));
-    });
-  }
-  $('adminPurchBtn').onclick = openAdminPurchases;
-
-  // Zahlungsarten für WhatsUp Pro: bar und/oder Überweisung (liegt auf dem Server, nicht im öffentlichen Code)
-  const payText = (p) => (p && (p.cash || p.iban) ? [p.cash && 'Bar', p.iban && 'Überweisung'].filter(Boolean).join(' · ') : '⚠️ Noch keine, Käufer können nicht bezahlen');
-  function ibanOk(v) {
-    const iban = String(v || '').toUpperCase().replace(/\s+/g, '');
-    if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return null;
-    const digits = (iban.slice(4) + iban.slice(0, 4)).replace(/[A-Z]/g, (ch) => String(ch.charCodeAt(0) - 55));
-    let r = 0;
-    for (const d of digits) r = (r * 10 + Number(d)) % 97;
-    return r === 1 ? iban : null;
-  }
-  function openAdminPay() {
-    openModal((box) => {
-      box.classList.add('admin-box');
-      box.appendChild(el('h3', '', '💳 Zahlungsarten'));
-      box.appendChild(el('div', 'muted', 'So können Käufer WhatsUp Pro bezahlen. Was du hier einträgst, sehen alle, die „WhatsUp Pro“ öffnen.'));
-      const sw = () => { const i = el('input'); i.type = 'checkbox'; i.className = 'switch'; return i; };
-      const field = (label, ph, max) => { const l = el('label', 'field', label); const i = el('input'); i.placeholder = ph; i.maxLength = max; i.autocomplete = 'off'; l.appendChild(i); return [l, i]; };
-      // Bar
-      const cash = sw();
-      const cashRow = el('label', 'setting');
-      cashRow.append(el('span', '', 'Barzahlung'), cash);
-      const [noteL, note] = field('Hinweis für Käufer', 'z. B. „Gib mir 2 CHF in der Pause“', 120);
-      // Überweisung
-      const bank = sw();
-      const bankRow = el('label', 'setting');
-      bankRow.append(el('span', '', 'Überweisung'), bank);
-      const [nameL, name] = field('Empfänger (wie auf dem Konto)', 'Vor- und Nachname', 60);
-      const [ibanL, iban] = field('IBAN', 'CH00 0000 0000 0000 0000 0', 42);
-      iban.spellcheck = false;
-      const g1 = el('div', 'group'); g1.append(cashRow);
-      const g2 = el('div', 'group'); g2.append(bankRow);
-      const cashBox = el('div', 'pay-fields'); cashBox.append(noteL);
-      const bankBox = el('div', 'pay-fields'); bankBox.append(nameL, ibanL);
-      const sync = () => { cashBox.classList.toggle('hidden', !cash.checked); bankBox.classList.toggle('hidden', !bank.checked); };
-      cash.onchange = bank.onchange = sync;
-      const err = el('div', 'status err');
-      let touched = false;
-      [cash, bank, note, name, iban].forEach((i) => i.addEventListener('input', () => { touched = true; }));
-      const fill = (p) => {
-        if (touched) return; // nichts überschreiben, was gerade eingetippt wird
-        p = p || {};
-        cash.checked = !!p.cash; note.value = p.cashNote || '';
-        bank.checked = !!p.iban; name.value = p.name || ''; iban.value = (p.iban || '').replace(/(.{4})/g, '$1 ').trim();
-        sync();
-      };
-      fill(purchData && purchData.pay);
-      const save = async () => {
-        err.textContent = '';
-        const pay = { cash: cash.checked, cashNote: note.value.trim(), iban: '', name: '' };
-        if (bank.checked) {
-          pay.iban = ibanOk(iban.value);
-          pay.name = name.value.trim();
-          if (!pay.iban) { err.textContent = 'Diese IBAN stimmt nicht. Bitte nochmal prüfen.'; return; }
-          if (!pay.name) { err.textContent = 'Bitte gib den Namen an, auf den das Konto läuft.'; return; }
-        }
-        try { await relay.pro.setPay(pay); toast('Zahlungsarten gespeichert'); closeModal(); loadPurchases().catch(() => {}); }
-        catch { err.textContent = 'Das hat nicht geklappt. Bitte später nochmal versuchen.'; }
-      };
-      box.append(g1, cashBox, g2, bankBox, err, buttons(['Abbrechen', 'ghost', closeModal], ['Speichern', 'primary', save]));
-      loadPurchases().then((d) => fill(d.pay)).catch(() => {});
-    });
-  }
-  $('adminPayBtn').onclick = openAdminPay;
 
   // Geschenk senden: Rahmen, Banner, Pro-Design oder ganz Pro an ausgewählte Nutzer (oder alle)
   function openAdminGift(preset) {
@@ -5857,6 +5680,9 @@
   $('pinBtn').onclick = async () => { const p = await window.chatboxWindow.togglePin(); $('pinBtn').classList.toggle('active', p); };
   $('backBtn').onclick = () => (view === 'viewChat' ? closeChat() : (show(lastTab), render()));
   $('trophyBtn').onclick = () => { show('viewAchievements'); renderAchievements(); games.open(); };
+  $('achPro').onclick = () => pro.open();
+  // Erfolge direkt öffnen (z. B. von der Pro-Seite aus)
+  function showAchievements() { show('viewAchievements'); renderAchievements(); games.open('ach'); }
   $('meCardBtn').onclick = openSettings;
   $('newGroupBtn').onclick = openNewGroup;
   $('chatHead').onclick = openInfo;
@@ -7428,7 +7254,7 @@
       if (t === 'chall') renderChall();
     }
     $('achTabs').querySelectorAll('button').forEach((b) => { b.onclick = () => setTab(b.dataset.tab); });
-    function open() { setTab(tab); relay.isAdmin().then((a) => { isAdmin = a || STUDIO; $('challAdmin').classList.toggle('hidden', !isAdmin); }); }
+    function open(t) { setTab(t || tab); relay.isAdmin().then((a) => { isAdmin = a || STUDIO; $('challAdmin').classList.toggle('hidden', !isAdmin); }); }
 
     // ---------- Rangliste ----------
     const fmtVal = (t, v) => (t === 'ach' ? `🏆 ${v}` : t === 'fire' ? `🔥 ${v} ${v === 1 ? 'Tag' : 'Tage'}` : `🏅 ${v} Pkt.`);
@@ -9723,12 +9549,7 @@
     const proApi = {
       list: async (codes) => (await post('/v1/pro/list', { codes })).pro || [],
       status: () => signedPro('status', (ts) => `prostatus|${me.code}|${ts}`),
-      request: () => signedPro('request', (ts) => `prorequest|${me.code}|${ts}`, { name: me.name }),
-      checkout: () => signedPro('checkout', (ts) => `procheckout|${me.code}|${ts}`),
       // Admin
-      purchases: () => signedPro('purchases', (ts) => `adminpurchases|${me.code}|${ts}`),
-      decide: (target, action) => signedPro('decide', (ts) => `admindecide|${me.code}|${ts}|${target}|${action}`, { target, action }),
-      setPay: (pay) => { const s = JSON.stringify(pay); return signedPro('pay', (ts) => `adminpay|${me.code}|${ts}|${s}`, { pay: s }); },
       gift: (targets, kind, item) => { const t = [].concat(targets); return signedPro('gift', (ts) => `admingift|${me.code}|${ts}|${t.join(',')}|${kind}|${item}`, { targets: t, kind, item, from: me.name }); },
       claim: (id) => signedPro('claim', (ts) => `proclaim|${me.code}|${ts}|${id}`, { id }),
     };
@@ -9797,8 +9618,8 @@
 
     // Abholen: beim Start, jede Minute, beim Zurückkehren in die App und wenn das Netz wieder da ist
     setInterval(() => poll(), 60000);
-    // Wartet eine Pro-Zahlung auf Bestätigung: jede Minute nachschauen; ⭐ der Freunde alle 30 Minuten
-    setInterval(() => pro.refresh(), 2 * 60000); // Pro-Status und neue Geschenke
+    // Geschenke (auch Pro) alle 2 Minuten nachschauen; ⭐ der Freunde alle 30 Minuten
+    setInterval(() => pro.refresh(), 2 * 60000);
     setInterval(() => { if (xmas.visible()) xmas.refresh(); }, 5 * 60000); // Stand des Events
     setInterval(() => pro.refreshOthers(), 30 * 60000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

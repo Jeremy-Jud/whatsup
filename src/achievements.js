@@ -5,6 +5,8 @@ window.CHATBOX_ACHIEVEMENTS = [
   ['msg100', '📨', 'Vielschreiber', 'Schicke 100 Nachrichten', 'sent', 100],
   ['msg500', '🗣️', 'Quasselstrippe', 'Schicke 500 Nachrichten', 'sent', 500],
   ['msg1000', '👑', 'Chat-Legende', 'Schicke 1000 Nachrichten', 'sent', 1000],
+  // Schaltet WhatsUp Pro frei, gratis (siehe pro in app.js; der Server zählt die Besitzer dieses Erfolgs als Pro)
+  ['msg10000', '⭐', 'WhatsUp Pro', "Schicke 10'000 Nachrichten", 'sent', 10000],
   ['friend1', '🤝', 'Erster Freund', 'Füge einen Freund hinzu', 'friends', 1],
   ['friend5', '👥', 'Beliebt', 'Habe 5 Freunde', 'friends', 5],
   ['friend10', '🌟', 'Social Star', 'Habe 10 Freunde', 'friends', 10],
@@ -31,5 +33,7 @@ window.CHATBOX_ACHIEVEMENTS = [
   ['game1', '🎮', 'Spielkind', 'Spiele ein Mini-Spiel im Chat zu Ende', 'gamesPlayed', 1],
   ['win5', '🏅', 'Seriensieger', 'Gewinne 5 Mini-Spiele', 'gamesWon', 5],
   ['quiz1m', '💰', 'Millionär', 'Gewinne im Millionen-Quiz die Million', 'quizMillion', 1],
-  ['all', '🏆', 'Komplettist', 'Schalte alle anderen Erfolge frei', 'unlockedOthers', 31],
+  ['all', '🏆', 'Komplettist', 'Schalte alle anderen Erfolge frei', 'unlockedOthers', 0], // Ziel: siehe unten
 ].map(([id, icon, title, desc, stat, goal]) => ({ id, icon, title, desc, stat, goal }));
+// „Komplettist“ braucht alle anderen Erfolge – wächst automatisch mit, wenn neue dazukommen
+window.CHATBOX_ACHIEVEMENTS.find((a) => a.id === 'all').goal = window.CHATBOX_ACHIEVEMENTS.length - 1;

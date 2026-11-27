@@ -1586,3 +1586,28 @@ input[type="search"]::-webkit-search-cancel-button { cursor: pointer; }
 @keyframes kp-pop { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
 .kp-reveal-acts { width: 100%; max-width: 560px; margin: 4px auto 0; }
 .kp-lead-note { width: 100%; max-width: 560px; margin: 0 auto; text-align: right; font-size: 12.5px; }
+
+/* ================= Punkte-Shop ================= */
+.chall-shop {
+  display: flex; align-items: center; gap: 10px; width: 100%; margin-top: 10px; padding: 11px 12px; border-radius: 14px; text-align: left; color: var(--fg);
+  background: linear-gradient(120deg, color-mix(in srgb, #38bdf8 14%, var(--card)), color-mix(in srgb, #4ade80 12%, var(--card)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #38bdf8 30%, transparent);
+}
+.chall-shop:hover { filter: brightness(1.06); }
+.chall-shop-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.chall-shop-t b { font-size: 14px; font-weight: 650; }
+.chall-shop-t .muted { font-size: 11.5px; }
+.shop-head { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+.shop-head h3 { margin: 0; }
+.shop-bal { font-size: 20px; font-weight: 750; font-variant-numeric: tabular-nums; }
+.shop-body { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.shop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.shop-item { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px 8px; border-radius: 14px; background: var(--soft); text-align: center; position: relative; }
+.shop-item.focus { box-shadow: inset 0 0 0 2px var(--accent); }
+.shop-pv { height: 64px; width: 100%; display: grid; place-items: center; overflow: hidden; }
+.shop-pv .banner-pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shop-design { width: 92px; height: 60px; pointer-events: none; }
+.shop-name { font-size: 12.5px; font-weight: 600; line-height: 1.2; }
+.shop-btn { width: 100%; padding: 6px 8px; border-radius: 10px; font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--fg); }
+.shop-btn.got { background: color-mix(in srgb, var(--online) 22%, transparent); opacity: 1; }
+.shop-tag { font-size: 10.5px; color: #d69e00; font-weight: 600; }

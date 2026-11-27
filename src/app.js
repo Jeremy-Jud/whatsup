@@ -1611,6 +1611,8 @@
   // Dieser Erfolg (10'000 gesendete Nachrichten) schaltet WhatsUp Pro frei
   const PRO_ACH = 'msg10000';
   const PRO_GOAL = (ACH.find((a) => a.id === PRO_ACH) || { goal: 10000 }).goal;
+  // Im Punkte-Shop gekauft (z. B. 'frame:flames'); maßgeblich ist der Server, siehe shop
+  let shopOwned = new Set(store.load('shopOwned', []));
   const fmtN = (n) => String(Math.max(0, Math.floor(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, "'"); // 10'000 (überall gleich, auch auf dem iPhone)
   function statValue(key) {
     if (key === 'friends') return friendCodes().length;
@@ -1929,7 +1931,7 @@
     // ---------- Geschenke vom Admin (Rahmen, Banner, Designs, Pro) ----------
     let owned = new Set(store.load('giftOwned', []));   // eingeforderte Geschenke, z. B. 'frame:orbit'
     let giftQueue = [], giftShowing = false, giftT = 0;
-    const hasDesign = (id) => isPro() || owned.has('design:' + id);
+    const hasDesign = (id) => isPro() || owned.has('design:' + id) || shopOwned.has('design:' + id);
     function setOwned(list) {
       const next = new Set(list.filter((k) => typeof k === 'string'));
       if ([...next].sort().join() === [...owned].sort().join()) return;
@@ -2342,6 +2344,7 @@
     // Geschenke vom Admin
     pro.ownedList().forEach((k) => r.add(k));
     xmas.ownedList().forEach((k) => r.add(k)); // Event-Belohnungen
+    shopOwned.forEach((k) => r.add(k)); // im Punkte-Shop gekauft
     return r;
   };
   // Neue Zahl geschaffter Challenges übernehmen; neu freigeschaltete Belohnungen melden
@@ -4679,7 +4682,7 @@
     runModalClose();
     const box = $('modalBox');
     box.replaceChildren();
-    box.classList.remove('recap-box', 'quiz-box', 'pro-box', 'admin-box');
+    box.classList.remove('recap-box', 'quiz-box', 'pro-box', 'admin-box', 'shop-box');
     delete box.dataset.owner;
     box.classList.remove('modal-big'); $('modal').classList.remove('modal-big'); // nur die Gruppen-Info ist groß
     box.scrollTop = 0;
@@ -5446,12 +5449,13 @@
       const locked = frameLocked(id), proOnly = !!(id && FRAMES[id].pro), eventOnly = !!(id && FRAMES[id].event);
       const b = el('button', 'frame-opt' + (id === draftFrame ? ' active' : '') + (id && FRAMES[id].locked ? ' exclusive' : '') + (locked ? ' locked' : '') + (proOnly ? ' pro-only' : '') + (eventOnly ? ' event-only' : ''));
       b.type = 'button';
-      b.title = id ? FRAMES[id].name + (locked ? (eventOnly ? ' – nur aus dem Weihnachts-Event' : proOnly ? ' – mit WhatsUp Pro' : FRAMES[id].challenge ? ` – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges` : ' – mit einem Code oder WhatsUp Pro freischalten') : '') : 'Kein Rahmen';
+      b.title = id ? FRAMES[id].name + (locked ? (eventOnly ? ' – nur aus dem Weihnachts-Event' : proOnly ? ' – mit WhatsUp Pro' : FRAMES[id].challenge ? ` – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges` : ' – im Punkte-Shop oder mit WhatsUp Pro') : '') : 'Kein Rahmen';
       b.appendChild(avatarEl(name, draftAvatar, me.code, 'md', null, id));
       b.appendChild(el('span', 'frame-name', id ? FRAMES[id].name : 'Keiner'));
       b.onclick = () => {
         if (locked && eventOnly) { toast('🎄 Exklusiv aus dem Weihnachts-Event, gibt es nie wieder'); return; }
-        if (locked && (proOnly || !FRAMES[id].challenge)) { pro.open(); return; }
+        if (locked && proOnly) { pro.open(); return; }
+        if (locked && !FRAMES[id].challenge) { shop.open('frame:' + id); return; } // Punkte-Shop (oder Pro)
         if (locked) { toast(`🔒 Challenge-Belohnung – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges`); return; }
         draftFrame = id; renderProfAvatar(); markProfileDirty(profileDirty());
       };
@@ -5465,9 +5469,10 @@
       const b = el('button', 'banner-opt' + (id ? '' : ' none') + (id === draftBanner ? ' active' : '') + (locked ? ' locked' : '') + (proOnly ? ' pro-only' : '') + (id && BANNERS[id].anim ? ' anim' : ''), id ? BANNERS[id].name : 'Kein Banner');
       b.type = 'button';
       if (id) b.style.background = BANNERS[id].bg;
-      b.title = locked ? (proOnly ? 'Mit WhatsUp Pro' : BANNERS[id].challenge ? `Ab ${BANNERS[id].challenge} geschafften Wochen-Challenges` : 'Mit einem Code oder WhatsUp Pro freischalten') : '';
+      b.title = locked ? (proOnly ? 'Mit WhatsUp Pro' : BANNERS[id].challenge ? `Ab ${BANNERS[id].challenge} geschafften Wochen-Challenges` : 'Im Punkte-Shop oder mit WhatsUp Pro') : '';
       b.onclick = () => {
-        if (locked && (proOnly || !BANNERS[id].challenge)) { pro.open(); return; }
+        if (locked && proOnly) { pro.open(); return; }
+        if (locked && !BANNERS[id].challenge) { shop.open('banner:' + id); return; } // Punkte-Shop (oder Pro)
         if (locked) { toast(`🔒 Challenge-Belohnung – ab ${BANNERS[id].challenge} geschafften Wochen-Challenges`); return; }
         draftBanner = id; renderProfAvatar(); markProfileDirty(profileDirty());
       };
@@ -7331,6 +7336,16 @@
       const top = el('div', 'chall-top');
       top.append(el('div', 'chall-week', `Woche vom ${wk} · ${left(d.ends)}`), el('div', 'chall-total', `🏅 ${d.total.done} geschafft · ${d.total.points} Punkte`));
       head.replaceChildren(top);
+      // Punkte-Shop: Punkte gegen Rahmen, Banner und Designs tauschen
+      const sb = el('button', 'chall-shop');
+      sb.type = 'button';
+      const bal = shop.balance();
+      const st = el('span', 'chall-shop-t');
+      st.append(el('b', '', '🛒 Punkte-Shop'), el('span', 'muted', bal == null ? 'Rahmen und Banner für deine Punkte' : `Du hast ${fmtN(bal)} ${bal === 1 ? 'Punkt' : 'Punkte'} zum Ausgeben`));
+      sb.append(st, el('span', 'pers-arrow', '›'));
+      sb.onclick = () => shop.open();
+      head.appendChild(sb);
+      shop.load().then(() => { const b2 = shop.balance(); if (b2 != null && st.isConnected) st.lastChild.textContent = `Du hast ${fmtN(b2)} ${b2 === 1 ? 'Punkt' : 'Punkte'} zum Ausgeben`; }).catch(() => {});
       list.replaceChildren(...d.list.map((c) => {
         const t = challText(c);
         const card = el('div', 'chall-card' + (c.done ? ' done' : ''));
@@ -7382,6 +7397,122 @@
     };
 
     return { open, reportProgress, nudge };
+  })();
+
+  // ================= Punkte-Shop =================
+  // Challenge-Punkte gegen Rahmen und Banner tauschen (Pro-Sachen gibt es nur mit Pro). Preise, Kontostand und Käufe liegen auf dem
+  // Server (relay: SHOP, shop_buys), die App merkt sich die gekauften Sachen nur für offline (shopOwned).
+  const shop = (() => {
+    const api = (p) => relay.url() + p;
+    let data = store.load('shopData', null); // { earned, spent, balance, owned, items: [{ id, price }] }
+    function setData(d) {
+      if (!d || !Array.isArray(d.owned) || !Array.isArray(d.items)) return;
+      data = d;
+      store.save('shopData', d);
+      const next = new Set(d.owned);
+      const changed = [...next].sort().join() !== [...shopOwned].sort().join();
+      shopOwned = next;
+      store.save('shopOwned', [...next]);
+      if (changed) { scheduleRender(); if (view === 'viewSettings') renderProfAvatar(); }
+    }
+    async function load() {
+      if (!relay.ready()) return data;
+      const r = await fetch(api(`/v1/reels/shop?me=${me.code}`));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      setData(await r.json());
+      return data;
+    }
+    async function buy(item) {
+      const ts = Date.now();
+      const sig = await relay.signText(`shopbuy|${me.code}|${ts}|${item}`);
+      const r = await fetch(api('/v1/reels/shopbuy'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: me.code, ts, sig, item }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      setData(d);
+      return d;
+    }
+    // Name, Art und Vorschau eines Artikels (null = kennt diese Version noch nicht)
+    function info(id) {
+      const [kind, key] = String(id).split(':');
+      if (kind === 'frame' && FRAMES[key]) return { type: 'Rahmen', name: FRAMES[key].name, pro: !!FRAMES[key].pro, preview: () => avatarEl(me.name, me.avatar, me.code, 'lg', null, key) };
+      if (kind === 'banner' && BANNERS[key]) return { type: 'Banner', name: BANNERS[key].name, pro: !!BANNERS[key].pro, preview: () => bannerEl(BANNERS[key].name, key, true) };
+      const d = DESIGNS.find((x) => x[0] === key);
+      if (kind === 'design' && d) {
+        return { type: 'Design', name: d[1], pro: true, preview: () => {
+          const b = el('div', 'design-opt shop-design');
+          b.dataset.design = key;
+          b.append(el('span', 'dz-scene'), el('span', 'dz-b1'), el('span', 'dz-b2'));
+          if (window.ThemeFx) window.ThemeFx.preview(b, key);
+          return b;
+        } };
+      }
+      return null;
+    }
+    // Hat man es schon auf anderem Weg (Pro, Code, Geschenk)?
+    // In WhatsUp Studio hat jedes Konto Pro – dort zeigt der Shop alles wie für normale Nutzer, damit man Kaufen testen kann
+    const have = (id) => !STUDIO && (id.startsWith('design:') ? pro.hasDesign(id.slice(7)) : rewards().has(id));
+
+    // Shop-Fenster; focus = Artikel, der hervorgehoben wird (z. B. der angetippte gesperrte Rahmen)
+    function open(focus) {
+      openModal((box) => {
+        box.classList.add('shop-box');
+        const head = el('div', 'shop-head');
+        const body = el('div', 'shop-body');
+        box.append(head, body);
+        let busy = null, scrolled = false, failed = false;
+        const draw = () => {
+          if (!box.isConnected || !box.classList.contains('shop-box')) return;
+          const bal = el('div', 'shop-bal', data ? `🏅 ${fmtN(data.balance)} ${data.balance === 1 ? 'Punkt' : 'Punkte'}` : '🏅 …');
+          head.replaceChildren(el('h3', '', '🛒 Punkte-Shop'), bal,
+            el('div', 'muted', 'Punkte gibt es für Wochen-Challenges (🏆 Erfolge → Challenges). Tausche sie gegen Rahmen und Banner.'));
+          body.replaceChildren();
+          if (!data) {
+            body.append(el('div', 'muted center', !relay.ready() ? 'Für den Shop muss in den Einstellungen „Über den Server zustellen“ an sein.' : failed ? '⚠️ Der Shop ist gerade nicht erreichbar.' : 'Wird geladen …'),
+              buttons(['Schließen', 'primary', closeModal]));
+            return;
+          }
+          [['frame', 'Rahmen'], ['banner', 'Banner'], ['design', 'Designs']].forEach(([kind, title]) => {
+            const items = data.items.filter((x) => x.id.startsWith(kind + ':')).map((x) => ({ ...x, i: info(x.id) })).filter((x) => x.i);
+            if (!items.length) return;
+            body.appendChild(el('div', 'rare-ach-title', title));
+            const grid = el('div', 'shop-grid');
+            items.forEach((x) => {
+              const bought = data.owned.includes(x.id), had = !bought && have(x.id), afford = data.balance >= x.price;
+              const card = el('div', 'shop-item' + (bought || had ? ' got' : '') + (x.id === focus ? ' focus' : ''));
+              const pv = el('div', 'shop-pv');
+              pv.appendChild(x.i.preview());
+              const btn = el('button', 'shop-btn' + (bought || had ? ' got' : afford ? ' primary' : ''), bought ? '✓ Gekauft' : had ? '✓ Hast du' : `🏅 ${fmtN(x.price)}`);
+              btn.type = 'button';
+              btn.disabled = bought || had || !!busy;
+              btn.title = bought || had ? '' : afford ? `Für ${fmtN(x.price)} Punkte kaufen` : `Dir fehlen noch ${fmtN(x.price - data.balance)} Punkte`;
+              btn.onclick = async () => {
+                if (!afford) { toast(`Dir fehlen noch ${fmtN(x.price - data.balance)} Punkte. Schaff ein paar Wochen-Challenges!`); return; }
+                if (!confirm(`${x.i.type} „${x.i.name}“ für ${fmtN(x.price)} Punkte kaufen?`)) return;
+                busy = x.id; draw();
+                try {
+                  const d = await buy(x.id);
+                  if (d.ok) toast(`🛒 ${x.i.type} „${x.i.name}“ gehört jetzt dir! Auswählen unter Du → Personalisieren.`, true);
+                  else toast('Dafür reichen deine Punkte nicht.');
+                } catch { toast('Das hat nicht geklappt. Versuch es gleich nochmal.'); }
+                busy = null; draw();
+              };
+              card.append(pv, el('div', 'shop-name', x.i.name), btn);
+              grid.appendChild(card);
+            });
+            body.appendChild(grid);
+          });
+          const btns = [];
+          if (!pro.isPro()) btns.push(['⭐ WhatsUp Pro', 'ghost', () => pro.open()]);
+          btns.push(['Schließen', 'primary', closeModal]);
+          body.appendChild(buttons(...btns));
+          const f = !scrolled && body.querySelector('.shop-item.focus');
+          if (f) { scrolled = true; f.scrollIntoView({ block: 'center' }); }
+        };
+        draw();
+        load().then(draw, () => { failed = true; draw(); });
+      });
+    }
+    return { open, load, balance: () => (data ? data.balance : null) };
   })();
 
   // ================= UpReels: öffentliche Kurzvideos für alle WhatsUp-Nutzer =================
@@ -9612,7 +9743,7 @@
       reportAchievements();
       setTimeout(reportSeen, 3000); // nach dem Start, wenn die Version bekannt ist
       setTimeout(() => games.reportProgress(), 6000); // Challenge-Fortschritt (Nachrichten, Streak)
-      setTimeout(() => { pro.checkAdmin(); pro.refresh(); pro.refreshOthers(); }, 2000);
+      setTimeout(() => { pro.checkAdmin(); pro.refresh(); pro.refreshOthers(); shop.load().catch(() => {}); }, 2000);
       setTimeout(() => { xmas.report(); xmas.refresh(); }, 3500); // Weihnachts-Event // WhatsUp Pro: eigener Status und ⭐ der Freunde
     }
 

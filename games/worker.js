@@ -73,7 +73,8 @@ export default {
       const sig = await checkSig(env, code, `kpnew|${code}|${ts}|${b.joinHash}|${timer}`, b.sig);
       if (sig !== 'ok') return json({ error: sig === 'nokey' ? 'nokey' : 'forbidden' }, 403);
       const id = env.GAMES.newUniqueId();
-      const r = await env.GAMES.get(id).fetch('https://room/init', { method: 'POST', body: JSON.stringify({ creator: code, joinHash: b.joinHash, timer }) });
+      // reveal: Der Anführer deckt am Schluss Karte für Karte auf (ab App 1.41). Ältere Apps schicken es nicht -> wie bisher.
+      const r = await env.GAMES.get(id).fetch('https://room/init', { method: 'POST', body: JSON.stringify({ creator: code, joinHash: b.joinHash, timer, reveal: b.reveal === true }) });
       if (!r.ok) return json({ error: 'init failed' }, 500);
       return json({ room: id.toString() });
     }
@@ -106,7 +107,7 @@ export class GameRoom {
     if (url.pathname === '/init' && req.method === 'POST') {
       if (await this.meta()) return new Response('exists', { status: 409 });
       const b = await req.json();
-      this.m = { creator: b.creator, joinHash: b.joinHash, timer: b.timer, phase: 'lobby', lobby: [b.creator], order: [], round: 0, deadline: 0, done: {}, created: Date.now(), expires: Date.now() + LOBBY_MS };
+      this.m = { creator: b.creator, joinHash: b.joinHash, timer: b.timer, revealMode: !!b.reveal, phase: 'lobby', lobby: [b.creator], order: [], round: 0, deadline: 0, done: {}, created: Date.now(), expires: Date.now() + LOBBY_MS };
       await this.save();
       await this.ctx.storage.setAlarm(this.m.expires);
       return new Response('ok');
@@ -139,8 +140,14 @@ export class GameRoom {
     else if (d.t === 'start') await this.start(code);
     else if (d.t === 'cancel') await this.cancel(code);
     else if (d.t === 'submit') await this.submit(ws, code, d);
+    else if (d.t === 'next') await this.next(code);
+    else if (d.t === 'revealAll') await this.revealAll(code);
   }
-  async webSocketClose() {}
+  // Anführer geht weg/kommt zurück: die anderen müssen wissen, ob sie selbst weiter aufdecken dürfen
+  async webSocketClose(ws) {
+    const m = await this.meta();
+    if (m && m.phase === 'reveal' && this.codeOf(ws) === m.creator) this.broadcast(ws);
+  }
   async webSocketError() {}
 
   async hello(ws, d) {
@@ -154,10 +161,11 @@ export class GameRoom {
     ws.serializeAttachment({ code });
     this.send(ws, this.stateFor(code));
     if (m.phase === 'play') await this.sendTask(ws, code);
-    if (m.phase === 'done') await this.sendResults(ws);
+    if (m.phase === 'done' || m.phase === 'reveal') await this.sendResults(ws);
+    if (m.phase === 'reveal' && code === m.creator) this.broadcast(); // Anführer wieder da
   }
 
-  stateFor(code) {
+  stateFor(code, gone) {
     const m = this.m;
     const s = {
       t: 'state', phase: m.phase, creator: m.creator, timer: m.timer, now: Date.now(),
@@ -171,9 +179,19 @@ export class GameRoom {
       s.mine = done.includes(code);
       s.playing = m.order.includes(code);
     }
+    if (m.phase === 'reveal') {
+      // Auflösung: Kette c, die ersten s Beiträge sind aufgedeckt
+      s.reveal = { c: m.reveal.c, s: m.reveal.s };
+      s.hostOnline = this.hostOnline(gone);
+      s.canLead = this.canLead(code, gone);
+    }
     return s;
   }
-  broadcast() { for (const ws of this.sockets()) this.send(ws, this.stateFor(this.codeOf(ws))); }
+  // gone: Verbindung, die gerade schliesst (zählt nicht mehr)
+  broadcast(gone) { for (const ws of this.sockets()) if (ws !== gone) this.send(ws, this.stateFor(this.codeOf(ws), gone)); }
+  hostOnline(gone) { return this.sockets().some((ws) => ws !== gone && this.codeOf(ws) === this.m.creator); }
+  // Aufdecken darf der Anführer – ist er nicht da, jeder Mitspieler (damit niemand festhängt)
+  canLead(code, gone) { return code === this.m.creator || (this.m.order.includes(code) && !this.hostOnline(gone)); }
 
   // Aufgabe dieser Runde: was der Vorgänger in der Kette gemacht hat (ohne Urheber)
   async sendTask(ws, code) {
@@ -254,7 +272,9 @@ export class GameRoom {
     if (Object.keys(puts).length) await this.ctx.storage.put(puts);
     m.round++;
     if (m.round >= n) {
-      m.phase = 'done';
+      // Mit Auflösung: erst der Anführer deckt auf (der erste Satz ist schon sichtbar), sonst gleich alles
+      m.phase = m.revealMode ? 'reveal' : 'done';
+      if (m.revealMode) m.reveal = { c: 0, s: 1 };
       m.deadline = 0;
       m.expires = Date.now() + KEEP_MS;
       await this.save();
@@ -268,6 +288,25 @@ export class GameRoom {
     await this.ctx.storage.setAlarm(m.deadline + GRACE_MS);
     this.broadcast();
     await this.broadcastTasks();
+  }
+
+  // Auflösung: nächste Karte (Satz/Bild), dann nächste Kette, am Ende fertig
+  async next(code) {
+    const m = this.m;
+    if (m.phase !== 'reveal' || !this.canLead(code)) return;
+    const n = m.order.length;
+    if (m.reveal.s < n) m.reveal = { c: m.reveal.c, s: m.reveal.s + 1 };
+    else if (m.reveal.c < n - 1) m.reveal = { c: m.reveal.c + 1, s: 1 };
+    else m.phase = 'done';
+    await this.save();
+    this.broadcast();
+  }
+  async revealAll(code) {
+    const m = this.m;
+    if (m.phase !== 'reveal' || !this.canLead(code)) return;
+    m.phase = 'done';
+    await this.save();
+    this.broadcast();
   }
 
   // Ergebnis: alle Ketten mit Urhebern, ein Beitrag pro Nachricht (Zeichnungen sind gross)

@@ -3721,7 +3721,8 @@
       const sig = await relay.signText(`kpnew|${me.code}|${ts}|${joinHash}|${timer}`);
       let res;
       try {
-        res = await fetch(GAMES_URL() + '/v1/kp/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: me.code, ts, sig, joinHash, timer }) });
+        // reveal: am Schluss deckt der Anführer Karte für Karte auf, alle sehen zu
+        res = await fetch(GAMES_URL() + '/v1/kp/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: me.code, ts, sig, joinHash, timer, reveal: true }) });
       } catch { throw new Error('Spieleserver nicht erreichbar. Versuch es gleich nochmal.'); }
       const d = await res.json().catch(() => ({}));
       if (!res.ok || !d.room) throw new Error('Spiel konnte nicht erstellt werden (' + (d.error || res.status) + ').');
@@ -3741,8 +3742,8 @@
       // Ergebnis schon auf dem Gerät? Dann direkt zeigen (auch wenn der Server es längst gelöscht hat)
       const saved = await db.get('media', 'kp|' + c.room).catch(() => null);
       if (cur !== c) return;
-      if (saved) { try { c.results = JSON.parse(saved); c.st = { phase: 'done' }; } catch {} }
-      if (!c.results) { store.save('kpActive', { room: c.room, chatId, msgId: m.id }); connect(); }
+      if (saved) { try { c.results = JSON.parse(saved); c.st = { phase: 'done' }; c.final = true; } catch {} }
+      if (!c.final) { store.save('kpActive', { room: c.room, chatId, msgId: m.id }); connect(); }
       show(view);
     }
     function leaveCurrent() {
@@ -3757,7 +3758,7 @@
     }
     function connect() {
       const c = cur;
-      if (!c || c.ws || c.closed || c.results) return;
+      if (!c || c.ws || c.closed || c.final) return;
       if (!relay.ready()) {
         // Briefkasten aus: geht nicht. Sonst (z. B. kurz nach dem Start) gleich nochmal versuchen.
         if (settings.relay === false) { c.err = 'Für Kritzelpost muss in den Einstellungen der Briefkasten-Server an sein.'; render(); }
@@ -3779,7 +3780,7 @@
         if (c.ws !== ws) return;
         c.ws = null; c.connected = false;
         clearInterval(c.pingT);
-        if (cur === c && !c.closed && !c.results && !c.gone) { render(); retry(c); }
+        if (cur === c && !c.closed && !c.final && !c.gone) { render(); retry(c); }
       };
       // Lebenszeichen: Hängt die Verbindung (z. B. nach dem Sperrbildschirm), neu aufbauen
       clearInterval(c.pingT);
@@ -3798,7 +3799,7 @@
     const send = (obj) => { if (cur && cur.ws && cur.ws.readyState === 1) { cur.ws.send(JSON.stringify(obj)); return true; } return false; };
     // Zurück aus dem Hintergrund: sofort prüfen
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden || !cur || cur.results) return;
+      if (document.hidden || !cur || cur.final) return;
       if (!cur.ws) { cur.tries = 0; connect(); } else if (cur.ws.readyState === 1) { cur.pingAt = Date.now(); send({ t: 'ping' }); }
     });
 
@@ -3820,9 +3821,16 @@
         if (d.phase === 'play' && c.pending && c.pending.round === d.round && !d.mine) send(c.pending);
         if (d.phase !== 'play' || d.round !== (c.pending && c.pending.round) || d.mine) c.pending = null;
         if (d.phase === 'closed') store.save('kpActive', null);
-        // Neu zeichnen bei neuer Phase/Runde und in der Lobby (Spielerliste); während einer Runde nur Timer/Fortschritt,
-        // damit Zeichnung und Text nicht gestört werden
-        if (!prev || prev.phase !== d.phase || prev.round !== d.round || d.phase === 'lobby' || (d.mine && !prev.mine)) render(); else renderLive();
+        // Auflösung fertig aufgedeckt: Ergebnis behalten und frei blättern lassen
+        if (d.phase === 'done' && c.results && !c.final) { finalize(c); return; }
+        // Auflösung beginnt: Bescheid geben, falls minimiert
+        if (d.phase === 'reveal' && (!prev || prev.phase !== 'reveal') && (c.view !== 'full' || document.hidden)) {
+          notify('🎨 Kritzelpost', 'Die Auflösung beginnt – schau zu!', { chatId: c.chatId });
+          pill.classList.add('pulse');
+        }
+        // Neu zeichnen bei neuer Phase/Runde, in der Lobby (Spielerliste) und bei jeder aufgedeckten Karte;
+        // während einer Runde nur Timer/Fortschritt, damit Zeichnung und Text nicht gestört werden
+        if (!prev || prev.phase !== d.phase || prev.round !== d.round || d.phase === 'lobby' || d.phase === 'reveal' || (d.mine && !prev.mine)) render(); else renderLive();
         return;
       }
       if (d.t === 'task') {
@@ -3840,11 +3848,15 @@
         return;
       }
       if (d.t === 'item') { (c.items[d.c] = c.items[d.c] || {})[d.r] = d; return; }
-      if (d.t === 'results') await finish(c, d);
+      if (d.t === 'results') {
+        await decryptResults(c, d);
+        // Ohne Auflösung (oder schon fertig aufgedeckt) gleich alles zeigen, sonst deckt der Anführer auf
+        if (!c.st || c.st.phase === 'done') finalize(c); else render();
+      }
     }
 
-    // Ende: alle Ketten entschlüsseln, auf dem Gerät speichern, anzeigen
-    async function finish(c, d) {
+    // Alle Ketten entschlüsseln (Auflösung oder Ende)
+    async function decryptResults(c, d) {
       const n = Math.max(0, Math.min(12, Number(d.n) || 0));
       const chains = [];
       for (let ci = 0; ci < n; ci++) {
@@ -3860,6 +3872,13 @@
       c.results = { n, chains, at: Date.now() };
       c.items = {};
       c.chainIdx = 0;
+    }
+    // Ende: Ergebnis auf dem Gerät speichern, Verbindung schliessen, frei blättern
+    function finalize(c) {
+      if (c.final || !c.results) return;
+      c.final = true;
+      c.chainIdx = 0;
+      const chains = c.results.chains;
       db.put('media', 'kp|' + c.room, JSON.stringify(c.results)).catch(() => {});
       store.save('kpActive', null);
       store.save('kpDone', [...store.load('kpDone', []).filter((r) => r !== c.room), c.room].slice(-100)); // für die Karte im Chat
@@ -3871,8 +3890,8 @@
         stats.gamesPlayed = (stats.gamesPlayed || 0) + 1;
         saveMeta(); checkAchievements();
       }
-      if (c.view !== 'full') { pill.classList.add('pulse'); toast('🎨 Kritzelpost ist fertig – schau dir die Ergebnisse an!'); }
-      render();
+      if (c.view !== 'full' && cur === c) { pill.classList.add('pulse'); toast('🎨 Kritzelpost ist fertig – schau dir die Ergebnisse an!'); }
+      if (cur === c) render();
       scheduleRender();
     }
 
@@ -3921,7 +3940,7 @@
     minBtn.onclick = () => show('mini');
     closeBtn.onclick = () => {
       // Läuft das Spiel noch, nur minimieren – sonst wirklich schliessen
-      if (cur && !cur.results && !cur.gone && cur.st && cur.st.phase !== 'closed') show('mini');
+      if (cur && !cur.final && !cur.gone && cur.st && cur.st.phase !== 'closed') show('mini');
       else leaveCurrent();
     };
     pill.onclick = () => show('full');
@@ -3952,13 +3971,16 @@
       const total = playing ? (st.kind === 'draw' ? ({ kurz: 60, normal: 100, lang: 160 }[c.timer] || 100) : ({ kurz: 40, normal: 60, lang: 90 }[c.timer] || 60)) : 1;
       bar.classList.toggle('hidden', !playing);
       barFill.style.width = playing ? Math.min(100, (left / total) * 100) + '%' : '0';
-      info.textContent = !c.connected && !c.results ? (c.err || 'Verbinde …')
+      const rv = st.phase === 'reveal' && st.reveal;
+      info.textContent = !c.connected && !c.final ? (c.err || 'Verbinde …')
         : st.phase === 'lobby' ? `${groupName()} · ${(st.players || []).length} dabei`
-          : playing ? `Runde ${st.round + 1}/${st.rounds} · ${st.submitted || 0}/${st.rounds} fertig` : st.phase === 'done' ? 'Ergebnisse' : '';
+          : playing ? `Runde ${st.round + 1}/${st.rounds} · ${st.submitted || 0}/${st.rounds} fertig`
+            : rv ? `Auflösung · Kette ${rv.c + 1}/${st.rounds}` : st.phase === 'done' ? 'Ergebnisse' : '';
       const wait = body.querySelector('.kp-wait-n');
       if (wait) wait.textContent = `${st.submitted || 0} von ${st.rounds} fertig`;
       // Minimiert: Pille mit Zeit und Aufgabe
-      if (c.results) pill.textContent = '🎨 Kritzelpost · Ergebnisse ansehen';
+      if (c.final) pill.textContent = '🎨 Kritzelpost · Ergebnisse ansehen';
+      else if (rv) pill.textContent = `🎨 Auflösung läuft · Kette ${rv.c + 1}/${st.rounds}`;
       else if (playing) pill.textContent = `${st.mine || c.sentRound === st.round ? '🎨 Warten …' : KIND_TEXT[st.kind] || '🎨'} · ${timerEl.textContent.replace('⏱ ', '')}`;
       else if (st.phase === 'lobby') pill.textContent = `🎨 Kritzelpost · Lobby (${(st.players || []).length})`;
       else pill.textContent = '🎨 Kritzelpost';
@@ -3979,11 +4001,15 @@
       if (keepPad && body.contains(c.pad.el)) return; // läuft schon – nicht stören
       body.replaceChildren();
       c.input = null;
-      if (c.results) { renderResults(c); return; }
+      if (c.final) { renderResults(c); return; }
       if (c.err && !c.connected) { body.appendChild(el('div', 'kp-msg', c.err)); return; }
       if (!c.connected || !c.st) { body.appendChild(el('div', 'kp-msg', 'Verbinde mit dem Spiel …')); return; }
       if (st.phase === 'closed') { body.appendChild(el('div', 'kp-msg', 'Das Spiel wurde abgebrochen.')); return; }
       if (st.phase === 'lobby') { renderLobby(c, st); return; }
+      if (st.phase === 'reveal') {
+        if (c.results) renderReveal(c, st); else body.appendChild(el('div', 'kp-msg', 'Die Auflösung wird geladen …'));
+        return;
+      }
       if (st.phase === 'done') { body.appendChild(el('div', 'kp-msg', 'Ergebnisse werden geladen …')); return; }
       if (!st.playing) { body.appendChild(el('div', 'kp-msg', 'Das Spiel läuft schon ohne dich. Beim nächsten Mal rechtzeitig „Mitspielen“ drücken!')); return; }
       if (st.mine || c.sentRound === st.round) {
@@ -4078,23 +4104,56 @@
       const next = el('button', 'ghost', '›'); next.disabled = idx === n - 1;
       prev.onclick = () => { c.chainIdx = idx - 1; render(); };
       next.onclick = () => { c.chainIdx = idx + 1; render(); };
-      const starter = chain[0] && chain[0].by;
-      nav.append(prev, el('div', 'kp-nav-t', `Kette ${idx + 1} von ${n}${starter ? ' · von ' + (starter === me.code ? 'dir' : nameOf(starter)) : ''}`), next);
+      nav.append(prev, el('div', 'kp-nav-t', chainTitle(chain, idx, n)), next);
       body.appendChild(nav);
       const list = el('div', 'kp-res');
-      chain.forEach((x) => {
-        const mine = x.by === me.code;
-        const row = el('div', 'kp-row' + (mine ? ' me' : ''));
-        row.appendChild(el('div', 'kp-who', x.by ? playerName(x.by) : 'Unbekannt'));
-        const bub = el('div', 'kp-bub' + (x.img ? ' pic' : ''));
-        if (x.img) { const img = el('img'); img.src = x.img; img.alt = 'Zeichnung'; img.loading = 'lazy'; bub.appendChild(img); }
-        else if (x.text) bub.textContent = x.text;
-        else { bub.classList.add('missing'); bub.textContent = x.k === 'img' ? '(nicht gezeichnet)' : '(nichts geschrieben)'; }
-        row.appendChild(bub);
-        list.appendChild(row);
-      });
+      chain.forEach((x) => list.appendChild(chainRow(x)));
       body.appendChild(list);
       if (idx < n - 1) { const b = el('button', 'primary kp-done', 'Nächste Kette ›'); b.onclick = () => { c.chainIdx = idx + 1; render(); body.scrollTop = 0; }; body.appendChild(b); }
+    }
+    function chainTitle(chain, idx, n) {
+      const starter = chain[0] && chain[0].by;
+      return `Kette ${idx + 1} von ${n}${starter ? ' · von ' + (starter === me.code ? 'dir' : nameOf(starter)) : ''}`;
+    }
+    // Ein Beitrag wie eine Chat-Nachricht: Name, darunter Satz oder Zeichnung
+    function chainRow(x, fresh) {
+      const row = el('div', 'kp-row' + (x.by === me.code ? ' me' : '') + (fresh ? ' kp-new' : ''));
+      row.appendChild(el('div', 'kp-who', x.by ? playerName(x.by) : 'Unbekannt'));
+      const bub = el('div', 'kp-bub' + (x.img ? ' pic' : ''));
+      if (x.img) { const img = el('img'); img.src = x.img; img.alt = 'Zeichnung'; bub.appendChild(img); }
+      else if (x.text) bub.textContent = x.text;
+      else { bub.classList.add('missing'); bub.textContent = x.k === 'img' ? '(nicht gezeichnet)' : '(nichts geschrieben)'; }
+      row.appendChild(bub);
+      return row;
+    }
+
+    // Auflösung: Der Anführer deckt Karte für Karte auf, alle sehen gleichzeitig zu
+    function renderReveal(c, st) {
+      const res = c.results, n = res.n, rv = st.reveal || { c: 0, s: 1 };
+      const idx = Math.max(0, Math.min(n - 1, rv.c)), shown = Math.max(1, Math.min(n, rv.s));
+      const chain = res.chains[idx] || [];
+      body.appendChild(el('div', 'kp-nav-t kp-reveal-t', chainTitle(chain, idx, n)));
+      const key = idx + ':' + shown, fresh = c.revealKey !== key;
+      const list = el('div', 'kp-res');
+      chain.slice(0, shown).forEach((x, i) => list.appendChild(chainRow(x, fresh && i === shown - 1)));
+      body.appendChild(list);
+      const lead = !!st.canLead;
+      const acts = el('div', 'kp-acts kp-reveal-acts');
+      if (lead) {
+        const lastCard = shown >= n, lastChain = idx >= n - 1;
+        const nextB = el('button', 'primary', !lastCard ? 'Weiter ▶' : !lastChain ? 'Nächste Kette ›' : 'Fertig 🎉');
+        nextB.onclick = () => { nextB.disabled = true; send({ t: 'next' }); };
+        if (st.creator === me.code) {
+          const allB = el('button', 'ghost', 'Alles aufdecken');
+          allB.onclick = () => { if (confirm('Alle Ketten auf einmal aufdecken?')) send({ t: 'revealAll' }); };
+          acts.appendChild(allB);
+        }
+        acts.appendChild(nextB);
+        if (st.creator !== me.code) body.appendChild(el('div', 'muted kp-lead-note', `${nameOf(st.creator)} ist nicht mehr da – du kannst weiter aufdecken.`));
+      } else acts.appendChild(el('div', 'muted', `${nameOf(st.creator)} deckt auf …`));
+      body.appendChild(acts);
+      // Neue Karte: bei allen nach unten scrollen
+      if (fresh) { c.revealKey = key; requestAnimationFrame(() => { body.scrollTo({ top: body.scrollHeight, behavior: 'smooth' }); }); }
     }
 
     // ---------- Karte im Gruppenchat ----------
@@ -4102,8 +4161,8 @@
       box.appendChild(el('div', 'game-sub', 'Schreiben, zeichnen, raten – reihum. Niemand weiss, von wem was kommt.'));
       const active = cur && cur.room === m.game.r;
       let label = '▶ Zum Spiel';
-      if ((active && cur.results) || store.load('kpDone', []).includes(m.game.r)) label = '🖼️ Ergebnisse ansehen';
-      else if (active && cur.st) label = cur.st.phase === 'lobby' ? '▶ Zur Lobby' : cur.st.phase === 'play' ? '▶ Weiterspielen' : '▶ Öffnen';
+      if ((active && cur.final) || store.load('kpDone', []).includes(m.game.r)) label = '🖼️ Ergebnisse ansehen';
+      else if (active && cur.st) label = cur.st.phase === 'lobby' ? '▶ Zur Lobby' : cur.st.phase === 'play' ? '▶ Weiterspielen' : cur.st.phase === 'reveal' ? '▶ Zur Auflösung' : '▶ Öffnen';
       else if (m.from === me.code) label = '▶ Lobby öffnen';
       const b = el('button', 'game-again quiz-play', label);
       b.type = 'button';

@@ -2981,6 +2981,7 @@
     const KINDS = {
       ttt: { icon: '❌⭕', name: 'Tic-Tac-Toe' }, rps: { icon: '✊✋✌️', name: 'Schere, Stein, Papier' }, quiz: { icon: '💰', name: 'Millionen-Quiz' },
       c4: { icon: '🔴🟡', name: '4 gewinnt', pro: true }, hang: { icon: '🔤', name: 'Galgenmännchen', pro: true },
+      kp: { icon: '🎨', name: 'Kritzelpost', pro: true, group: true }, // Gruppenspiel über den Spieleserver (siehe kritzel)
     };
     const RPS = ['✊', '✋', '✌️'], RPS_NAME = ['Stein', 'Papier', 'Schere'];
     const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
@@ -2998,6 +2999,12 @@
     function valid(g, chatId, from) {
       if (!g || typeof g !== 'object' || !Object.hasOwn(KINDS, g.k)) return null;
       if (g.k === 'quiz') return { k: 'quiz' };
+      // Kritzelpost: Raum auf dem Spieleserver + Schlüssel (nur in Gruppen)
+      if (g.k === 'kp') {
+        if (!chatId.startsWith('g:') || typeof g.r !== 'string' || !/^[0-9a-f]{64}$/.test(g.r)) return null;
+        if (typeof g.key !== 'string' || !/^[A-Za-z0-9+/]{43}=$/.test(g.key) || typeof g.j !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(g.j)) return null;
+        return { k: 'kp', r: g.r, key: g.key, j: g.j, t: ['kurz', 'normal', 'lang'].includes(g.t) ? g.t : 'normal' };
+      }
       if (typeof g.vs !== 'string' || !CODE_RE.test(g.vs) || g.vs === from) return null;
       if (chatId.startsWith('u:')) {
         if (g.vs !== (from === me.code ? chatId.slice(2) : me.code)) return null;
@@ -3098,7 +3105,7 @@
       return { board, n, winner, line, done, players: [x, o], turn: done ? null : (n % 2 ? o : x) };
     }
     function apply(m, from, n, v, chatId) {
-      if (!m.game || m.deleted || !Number.isInteger(v)) return false;
+      if (!m.game || m.deleted || !Number.isInteger(v) || m.game.k === 'kp') return false;
       m.mv = m.mv || {};
       if (m.game.k === 'quiz') {
         if (!chatMembers(chatId).includes(from) || !(v === 0 || quiz.LADDER.includes(v)) || m.mv[from] != null) return false;
@@ -3253,6 +3260,7 @@
       const box = el('div', 'game game-' + m.game.k);
       box.appendChild(el('div', 'game-title', `${KINDS[m.game.k].icon} ${KINDS[m.game.k].name}`));
       if (m.game.k === 'quiz') { quizView(chatId, m, box); return box; }
+      if (m.game.k === 'kp') { kritzel.card(chatId, m, box); return box; }
       const s = state(m), [x, o] = players(m), meIn = players(m).includes(me.code);
       if (m.game.k === 'c4') {
         box.appendChild(el('div', 'game-sub', `${who(x)} 🔴 · ${who(o)} 🟡`));
@@ -3353,7 +3361,7 @@
       const list = chats[chatId] || [], recent = Date.now() - 24 * 3600 * 1000;
       for (let i = list.length - 1, seen = 0; i >= 0 && seen < 30; i--, seen++) {
         const m = list[i];
-        if (!m.game || m.deleted || m.ts < recent || m.game.k === 'quiz') continue;
+        if (!m.game || m.deleted || m.ts < recent || m.game.k === 'quiz' || m.game.k === 'kp') continue;
         const s = state(m, chatId);
         if (s.done || !s.players.includes(me.code)) continue;
         if (m.game.k === 'rps') { if (s.picks[me.code] != null) return true; continue; }
@@ -3400,13 +3408,26 @@
     function openNew(chatId) {
       const isGroup = chatId.startsWith('g:');
       const opps = isGroup ? others(groups[chatId.slice(2)] || { members: [] }) : [chatId.slice(2)];
-      let kind = 'ttt', vs = isGroup ? null : opps[0];
+      let kind = 'ttt', vs = isGroup ? null : opps[0], kpTimer = 'normal';
       openModal((box) => {
         box.appendChild(el('h3', '', '🎮 Spiel starten'));
         const kinds = el('div', 'game-kinds');
         const pick = el('div', 'game-pick');
         const quizNote = el('div', 'muted hidden', isGroup ? 'Alle in der Gruppe können mitspielen. Jeder löst die Fragen für sich.' : `Du und ${nameOf(vs)} spielt die Fragen jeweils für euch.`);
+        // Kritzelpost: nur in Gruppen; wer startet, braucht Pro – mitspielen können alle
+        const kpNote = el('div', 'kp-note hidden');
+        kpNote.append(el('div', 'muted', 'Alle in der Gruppe können sich zum Mitspielen melden. Jeder schreibt einen Satz, dann wird abwechselnd gezeichnet und beschrieben – niemand weiss, von wem was kommt. Am Schluss seht ihr alle Ketten.'),
+          el('div', 'label', 'Zeit pro Runde'));
+        const timers = el('div', 'seg kp-timers');
+        [['kurz', 'Kurz'], ['normal', 'Normal'], ['lang', 'Lang']].forEach(([id, label]) => {
+          const b = el('button', id === kpTimer ? 'on' : '', label);
+          b.type = 'button';
+          b.onclick = () => { kpTimer = id; timers.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); };
+          timers.appendChild(b);
+        });
+        kpNote.appendChild(timers);
         Object.entries(KINDS).forEach(([k, d]) => {
+          if (d.group && !isGroup) return;
           const b = el('button', 'game-kind' + (k === kind ? ' on' : '') + (d.pro ? ' pro-only' : ''));
           b.type = 'button';
           b.append(el('span', 'game-kind-ic', d.icon), el('span', 'game-kind-name', d.name));
@@ -3415,12 +3436,14 @@
             if (d.pro && !pro.isPro()) { pro.open(); return; }
             kind = k;
             kinds.querySelectorAll('.game-kind').forEach((x) => x.classList.toggle('on', x === b));
-            pick.classList.toggle('hidden', k === 'quiz');
+            pick.classList.toggle('hidden', k === 'quiz' || k === 'kp');
             quizNote.classList.toggle('hidden', k !== 'quiz');
+            kpNote.classList.toggle('hidden', k !== 'kp');
           };
           kinds.appendChild(b);
         });
         box.appendChild(kinds);
+        box.appendChild(kpNote);
         if (isGroup) {
           pick.appendChild(el('div', 'label', 'Gegen wen?'));
           if (!opps.length) pick.appendChild(el('div', 'muted', 'In dieser Gruppe ist sonst niemand.'));
@@ -3438,7 +3461,12 @@
         const err = el('div', 'status err');
         box.appendChild(err);
         box.appendChild(buttons(['Abbrechen', 'ghost', closeModal], ['Herausfordern', 'primary', () => {
-          if (kind === 'quiz' && !opps.length) { err.textContent = 'In dieser Gruppe ist sonst niemand.'; return; }
+          if ((kind === 'quiz' || kind === 'kp') && !opps.length) { err.textContent = 'In dieser Gruppe ist sonst niemand.'; return; }
+          if (kind === 'kp') {
+            err.textContent = '';
+            kritzel.create(chatId, kpTimer).then(closeModal, (e) => { err.textContent = e.message || 'Spiel konnte nicht erstellt werden.'; });
+            return;
+          }
           if (kind !== 'quiz' && !vs) { err.textContent = 'Wähle, gegen wen du spielst.'; return; }
           closeModal();
           start(chatId, kind, vs);
@@ -3639,6 +3667,460 @@
     })();
 
     return { valid, view, receive, adopt, openNew, state, name: (k) => (KINDS[k] || {}).name || 'Spiel' };
+  })();
+
+  // ================= Kritzelpost (Gruppenspiel) =================
+  // Jeder schreibt einen Satz, dann wandern die Ketten reihum: zeichnen, beschreiben, zeichnen …, bis jeder an jeder
+  // Kette einmal dran war. Niemand sieht, von wem etwas kommt – erst am Schluss werden alle Ketten mit Namen gezeigt.
+  // Läuft über den Spieleserver (games/worker.js): ein Raum pro Spiel, Live-Verbindung, Timer für alle.
+  // Inhalte sind Ende-zu-Ende verschlüsselt (Schlüssel steckt in der Gruppen-Nachricht), der Server sieht nur Datensalat.
+  // Starten braucht Pro, mitspielen kann jeder in der Gruppe. Vollbild, minimierbar (in andere Chats wechseln und zurück).
+  const kritzel = (() => {
+    const GAMES_URL = () => store.load('gamesUrl', null) || 'https://whatsup-games.whatsup-relay.workers.dev';
+    const MAX_TEXT = 140;
+    const IMG_RE = /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+    const KIND_TEXT = { write: '✍️ Satz schreiben', draw: '🎨 Zeichnen', describe: '🔍 Beschreiben' };
+    const te = new TextEncoder(), td = new TextDecoder();
+    const hexOf = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    let cur = null;
+    // cur = { room, chatId, msgId, key, join, timer, ws, connected, st (Serverstand), task, plain (Aufgabe entschlüsselt),
+    //         offset (Serverzeit), pad, sentRound, pending, items, results, view: 'full' | 'mini' }
+
+    // ---------- Verschlüsselung (AES-GCM, Schlüssel aus der Gruppen-Nachricht) ----------
+    async function encrypt(obj) {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: te.encode(cur.room) }, cur.key, te.encode(JSON.stringify(obj))));
+      const out = new Uint8Array(12 + ct.length);
+      out.set(iv); out.set(ct, 12);
+      return LIB.b64(out);
+    }
+    async function decrypt(c, b64) {
+      if (!b64) return null;
+      try {
+        const b = LIB.unb64(b64);
+        const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b.slice(0, 12), additionalData: te.encode(c.room) }, c.key, b.slice(12));
+        return JSON.parse(td.decode(pt));
+      } catch { return null; }
+    }
+    // Entschlüsselten Beitrag prüfen: Text oder Bild, sonst nichts
+    function plainOf(k, obj) {
+      if (!obj || typeof obj.v !== 'string') return null;
+      if (k === 'img') return IMG_RE.test(obj.v) && obj.v.length < 1200000 ? { img: obj.v } : null;
+      const t = clean(obj.v, MAX_TEXT);
+      return t ? { text: t } : null;
+    }
+    const importKey = (b64) => crypto.subtle.importKey('raw', LIB.unb64(b64), 'AES-GCM', false, ['encrypt', 'decrypt']);
+
+    // ---------- Spiel anlegen (nur Pro, nur Gruppen) ----------
+    async function create(chatId, timer) {
+      if (!pro.isPro()) { pro.open(); throw new Error('Kritzelpost starten geht mit WhatsUp Pro.'); }
+      if (!relay.ready()) throw new Error('Dafür muss in den Einstellungen der Briefkasten-Server an sein.');
+      const key = crypto.getRandomValues(new Uint8Array(32)), join = crypto.getRandomValues(new Uint8Array(16));
+      const joinHash = hexOf(await crypto.subtle.digest('SHA-256', join));
+      const ts = Date.now();
+      const sig = await relay.signText(`kpnew|${me.code}|${ts}|${joinHash}|${timer}`);
+      let res;
+      try {
+        res = await fetch(GAMES_URL() + '/v1/kp/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: me.code, ts, sig, joinHash, timer }) });
+      } catch { throw new Error('Spieleserver nicht erreichbar. Versuch es gleich nochmal.'); }
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.room) throw new Error('Spiel konnte nicht erstellt werden (' + (d.error || res.status) + ').');
+      const game = { k: 'kp', r: d.room, key: LIB.b64(key), j: LIB.b64(join), t: timer };
+      await sendMessage(chatId, `🎨 Kritzelpost: ${me.name} lädt zum Zeichenspiel ein! (Zum Mitspielen WhatsUp aktualisieren)`, null, { game, noReply: true });
+      const m = (chats[chatId] || []).slice().reverse().find((x) => x.game && x.game.r === d.room);
+      if (m) open(chatId, m);
+    }
+
+    // ---------- Öffnen / Verbinden ----------
+    async function open(chatId, m, view = 'full') {
+      if (cur && cur.room === m.game.r) { show(view); return; }
+      leaveCurrent();
+      const c = { room: m.game.r, chatId, msgId: m.id, join: m.game.j, timer: m.game.t, view, items: {}, connected: false };
+      try { c.key = await importKey(m.game.key); } catch { toast('⚠️ Dieses Spiel lässt sich nicht öffnen.'); return; }
+      cur = c;
+      // Ergebnis schon auf dem Gerät? Dann direkt zeigen (auch wenn der Server es längst gelöscht hat)
+      const saved = await db.get('media', 'kp|' + c.room).catch(() => null);
+      if (cur !== c) return;
+      if (saved) { try { c.results = JSON.parse(saved); c.st = { phase: 'done' }; } catch {} }
+      if (!c.results) { store.save('kpActive', { room: c.room, chatId, msgId: m.id }); connect(); }
+      show(view);
+    }
+    function leaveCurrent() {
+      if (!cur) return;
+      const c = cur;
+      cur = null;
+      c.closed = true;
+      clearInterval(c.pingT);
+      if (c.ws) { try { c.ws.close(); } catch {} }
+      if (c.pad) c.pad.destroy();
+      ov.classList.add('hidden'); pill.classList.add('hidden');
+    }
+    function connect() {
+      const c = cur;
+      if (!c || c.ws || c.closed || c.results) return;
+      if (!relay.ready()) {
+        // Briefkasten aus: geht nicht. Sonst (z. B. kurz nach dem Start) gleich nochmal versuchen.
+        if (settings.relay === false) { c.err = 'Für Kritzelpost muss in den Einstellungen der Briefkasten-Server an sein.'; render(); }
+        else { clearTimeout(c.retryT); c.retryT = setTimeout(() => { if (cur === c) connect(); }, 1500); }
+        return;
+      }
+      let ws;
+      try { ws = new WebSocket(GAMES_URL().replace(/^http/, 'ws') + `/v1/kp/${c.room}/ws`); } catch { retry(c); return; }
+      c.ws = ws;
+      ws.onopen = async () => {
+        try {
+          const ts = Date.now();
+          const sig = await relay.signText(`kp|${me.code}|${c.room}|${ts}`);
+          ws.send(JSON.stringify({ t: 'hello', code: me.code, ts, sig, join: c.join }));
+        } catch { try { ws.close(); } catch {} }
+      };
+      ws.onmessage = (e) => { let d; try { d = JSON.parse(e.data); } catch { return; } if (cur === c && c.ws === ws) handle(c, d).catch(console.error); };
+      ws.onclose = () => {
+        if (c.ws !== ws) return;
+        c.ws = null; c.connected = false;
+        clearInterval(c.pingT);
+        if (cur === c && !c.closed && !c.results && !c.gone) { render(); retry(c); }
+      };
+      // Lebenszeichen: Hängt die Verbindung (z. B. nach dem Sperrbildschirm), neu aufbauen
+      clearInterval(c.pingT);
+      c.pingT = setInterval(() => {
+        if (c.ws !== ws || ws.readyState !== 1) return;
+        if (c.pingAt && Date.now() - c.pingAt > 12000) { try { ws.close(); } catch {} return; }
+        c.pingAt = Date.now();
+        ws.send(JSON.stringify({ t: 'ping' }));
+      }, 15000);
+    }
+    function retry(c) {
+      clearTimeout(c.retryT);
+      c.tries = (c.tries || 0) + 1;
+      c.retryT = setTimeout(() => { if (cur === c) connect(); }, Math.min(15000, 1000 * c.tries));
+    }
+    const send = (obj) => { if (cur && cur.ws && cur.ws.readyState === 1) { cur.ws.send(JSON.stringify(obj)); return true; } return false; };
+    // Zurück aus dem Hintergrund: sofort prüfen
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden || !cur || cur.results) return;
+      if (!cur.ws) { cur.tries = 0; connect(); } else if (cur.ws.readyState === 1) { cur.pingAt = Date.now(); send({ t: 'ping' }); }
+    });
+
+    // ---------- Nachrichten vom Server ----------
+    async function handle(c, d) {
+      if (d.t === 'pong') { c.pingAt = 0; c.offset = (d.now || Date.now()) - Date.now(); return; }
+      if (d.t === 'error') {
+        if (d.e === 'auth') { c.gone = true; c.err = 'Kein Zugang zu diesem Spiel.'; render(); }
+        else toast('⚠️ ' + (d.e === 'zu gross' ? 'Die Zeichnung ist zu gross.' : 'Fehler im Spiel.'));
+        return;
+      }
+      if (d.t === 'gone') { c.gone = true; c.err = 'Dieses Spiel gibt es nicht mehr.'; store.save('kpActive', null); render(); return; }
+      if (d.t === 'state') {
+        c.connected = true; c.tries = 0; c.err = null;
+        c.offset = (d.now || Date.now()) - Date.now();
+        const prev = c.st;
+        c.st = d;
+        // Abgegeben, aber der Server hat es (Verbindung war weg) nicht bekommen: nochmal schicken
+        if (d.phase === 'play' && c.pending && c.pending.round === d.round && !d.mine) send(c.pending);
+        if (d.phase !== 'play' || d.round !== (c.pending && c.pending.round) || d.mine) c.pending = null;
+        if (d.phase === 'closed') store.save('kpActive', null);
+        // Neu zeichnen bei neuer Phase/Runde und in der Lobby (Spielerliste); während einer Runde nur Timer/Fortschritt,
+        // damit Zeichnung und Text nicht gestört werden
+        if (!prev || prev.phase !== d.phase || prev.round !== d.round || d.phase === 'lobby' || (d.mine && !prev.mine)) render(); else renderLive();
+        return;
+      }
+      if (d.t === 'task') {
+        if (c.task && c.task.round === d.round) return;
+        let plain = null;
+        if (d.prompt && d.prompt.d) plain = plainOf(d.prompt.k, await decrypt(c, d.prompt.d));
+        c.task = d; c.plain = plain;
+        c.sentRound = -1;
+        render();
+        if (c.view !== 'full' || document.hidden) {
+          const what = d.kind === 'draw' ? 'Jetzt zeichnen!' : d.kind === 'describe' ? 'Jetzt beschreiben, was du siehst!' : 'Schreib einen Satz!';
+          notify('🎨 Kritzelpost', `Neue Runde: ${what}`, { chatId: c.chatId });
+          pill.classList.add('pulse');
+        }
+        return;
+      }
+      if (d.t === 'item') { (c.items[d.c] = c.items[d.c] || {})[d.r] = d; return; }
+      if (d.t === 'results') await finish(c, d);
+    }
+
+    // Ende: alle Ketten entschlüsseln, auf dem Gerät speichern, anzeigen
+    async function finish(c, d) {
+      const n = Math.max(0, Math.min(12, Number(d.n) || 0));
+      const chains = [];
+      for (let ci = 0; ci < n; ci++) {
+        const chain = [];
+        for (let r = 0; r < n; r++) {
+          const it = (c.items[ci] || {})[r];
+          const k = r === 0 || r % 2 === 0 ? 'text' : 'img';
+          const p = it && !it.missing ? plainOf(k, await decrypt(c, it.d)) : null;
+          chain.push({ by: it && /^[A-Z0-9]{6}$/.test(it.by || '') ? it.by : null, k, ...(p || { missing: true }) });
+        }
+        chains.push(chain);
+      }
+      c.results = { n, chains, at: Date.now() };
+      c.items = {};
+      c.chainIdx = 0;
+      db.put('media', 'kp|' + c.room, JSON.stringify(c.results)).catch(() => {});
+      store.save('kpActive', null);
+      store.save('kpDone', [...store.load('kpDone', []).filter((r) => r !== c.room), c.room].slice(-100)); // für die Karte im Chat
+      if (c.ws) { try { c.ws.close(); } catch {} c.ws = null; }
+      // Statistik: einmal pro Spiel
+      const counted = store.load('kpCounted', []);
+      if (!counted.includes(c.room) && chains.some((ch) => ch.some((x) => x.by === me.code))) {
+        store.save('kpCounted', [...counted, c.room].slice(-50));
+        stats.gamesPlayed = (stats.gamesPlayed || 0) + 1;
+        saveMeta(); checkAchievements();
+      }
+      if (c.view !== 'full') { pill.classList.add('pulse'); toast('🎨 Kritzelpost ist fertig – schau dir die Ergebnisse an!'); }
+      render();
+      scheduleRender();
+    }
+
+    // ---------- Abgeben ----------
+    const serverNow = () => Date.now() + ((cur && cur.offset) || 0);
+    async function submit() {
+      const c = cur, st = c && c.st;
+      if (!st || st.phase !== 'play' || st.mine || !st.playing || c.sentRound === st.round || !c.task || c.task.round !== st.round) return;
+      const round = st.round;
+      c.sentRound = round;
+      let k, v;
+      if (st.kind === 'draw') { k = 'img'; v = c.pad && !c.pad.isBlank() ? c.pad.toDataURL(480000) : ''; }
+      else { k = 'text'; v = clean(c.input ? c.input.value : '', MAX_TEXT); }
+      const d = v ? await encrypt({ v }) : '';
+      if (cur !== c) return;
+      c.pending = { t: 'submit', round, k, d };
+      send(c.pending);
+      store.save('kpDraft', null);
+      render();
+    }
+    // Entwurf sichern (übersteht Neuladen): Text sofort, Zeichnung kurz nach dem letzten Strich
+    function saveDraft() {
+      const c = cur;
+      if (!c || !c.st || c.st.phase !== 'play') return;
+      const draft = { room: c.room, round: c.st.round };
+      if (c.input) draft.text = c.input.value;
+      if (c.pad && !c.pad.isBlank()) draft.img = c.pad.toDataURL(400000);
+      store.save('kpDraft', draft);
+    }
+
+    // ---------- Oberfläche ----------
+    const ov = el('div', 'kp hidden');
+    const head = el('div', 'kp-head');
+    const title = el('div', 'kp-title', '🎨 Kritzelpost');
+    const info = el('div', 'kp-info');
+    const timerEl = el('div', 'kp-timer hidden');
+    const minBtn = el('button', 'kp-x', '–'); minBtn.type = 'button'; minBtn.title = 'Minimieren (weiterspielen in anderen Chats)';
+    const closeBtn = el('button', 'kp-x', '✕'); closeBtn.type = 'button'; closeBtn.title = 'Schliessen';
+    head.append(title, info, timerEl, minBtn, closeBtn);
+    const bar = el('div', 'kp-bar'); const barFill = el('div'); bar.appendChild(barFill);
+    const body = el('div', 'kp-body');
+    ov.append(head, bar, body);
+    // Kleine Anzeige, wenn minimiert (über allen Chats)
+    const pill = el('button', 'kp-pill hidden'); pill.type = 'button';
+    document.body.append(ov, pill);
+    minBtn.onclick = () => show('mini');
+    closeBtn.onclick = () => {
+      // Läuft das Spiel noch, nur minimieren – sonst wirklich schliessen
+      if (cur && !cur.results && !cur.gone && cur.st && cur.st.phase !== 'closed') show('mini');
+      else leaveCurrent();
+    };
+    pill.onclick = () => show('full');
+
+    function show(view) {
+      if (!cur) return;
+      cur.view = view;
+      ov.classList.toggle('hidden', view !== 'full');
+      pill.classList.toggle('hidden', view === 'full');
+      pill.classList.remove('pulse');
+      render();
+    }
+
+    function playerName(code) { return code === me.code ? 'Du' : nameOf(code); }
+    function groupName() { const g = cur && groups[cur.chatId.slice(2)]; return g ? g.name : 'Gruppe'; }
+
+    // Nur Timer/Fortschritt aktualisieren (ohne die Zeichenfläche neu aufzubauen)
+    function renderLive() {
+      const c = cur;
+      if (!c) return;
+      const st = c.st || {};
+      const playing = st.phase === 'play';
+      let left = 0;
+      if (playing && st.deadline) left = Math.max(0, Math.ceil((st.deadline - serverNow()) / 1000));
+      timerEl.classList.toggle('hidden', !playing);
+      timerEl.classList.toggle('low', playing && left <= 10);
+      timerEl.textContent = `⏱ ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+      const total = playing ? (st.kind === 'draw' ? ({ kurz: 60, normal: 100, lang: 160 }[c.timer] || 100) : ({ kurz: 40, normal: 60, lang: 90 }[c.timer] || 60)) : 1;
+      bar.classList.toggle('hidden', !playing);
+      barFill.style.width = playing ? Math.min(100, (left / total) * 100) + '%' : '0';
+      info.textContent = !c.connected && !c.results ? (c.err || 'Verbinde …')
+        : st.phase === 'lobby' ? `${groupName()} · ${(st.players || []).length} dabei`
+          : playing ? `Runde ${st.round + 1}/${st.rounds} · ${st.submitted || 0}/${st.rounds} fertig` : st.phase === 'done' ? 'Ergebnisse' : '';
+      const wait = body.querySelector('.kp-wait-n');
+      if (wait) wait.textContent = `${st.submitted || 0} von ${st.rounds} fertig`;
+      // Minimiert: Pille mit Zeit und Aufgabe
+      if (c.results) pill.textContent = '🎨 Kritzelpost · Ergebnisse ansehen';
+      else if (playing) pill.textContent = `${st.mine || c.sentRound === st.round ? '🎨 Warten …' : KIND_TEXT[st.kind] || '🎨'} · ${timerEl.textContent.replace('⏱ ', '')}`;
+      else if (st.phase === 'lobby') pill.textContent = `🎨 Kritzelpost · Lobby (${(st.players || []).length})`;
+      else pill.textContent = '🎨 Kritzelpost';
+      // Zeit abgelaufen: automatisch abgeben, was da ist
+      if (playing && st.playing && !st.mine && c.sentRound !== st.round && st.deadline && serverNow() >= st.deadline - 400) submit();
+    }
+    setInterval(() => { if (cur && cur.st && cur.st.phase === 'play') renderLive(); }, 250);
+
+    function render() {
+      const c = cur;
+      if (!c) return;
+      renderLive();
+      if (c.view !== 'full') return;
+      const st = c.st || {};
+      // Zeichenfläche nur behalten, wenn wir weiter in derselben Zeichenrunde sind
+      const keepPad = c.pad && st.phase === 'play' && st.kind === 'draw' && c.padRound === st.round && !(st.mine || c.sentRound === st.round);
+      if (!keepPad && c.pad) { c.pad.destroy(); c.pad = null; }
+      if (keepPad && body.contains(c.pad.el)) return; // läuft schon – nicht stören
+      body.replaceChildren();
+      c.input = null;
+      if (c.results) { renderResults(c); return; }
+      if (c.err && !c.connected) { body.appendChild(el('div', 'kp-msg', c.err)); return; }
+      if (!c.connected || !c.st) { body.appendChild(el('div', 'kp-msg', 'Verbinde mit dem Spiel …')); return; }
+      if (st.phase === 'closed') { body.appendChild(el('div', 'kp-msg', 'Das Spiel wurde abgebrochen.')); return; }
+      if (st.phase === 'lobby') { renderLobby(c, st); return; }
+      if (st.phase === 'done') { body.appendChild(el('div', 'kp-msg', 'Ergebnisse werden geladen …')); return; }
+      if (!st.playing) { body.appendChild(el('div', 'kp-msg', 'Das Spiel läuft schon ohne dich. Beim nächsten Mal rechtzeitig „Mitspielen“ drücken!')); return; }
+      if (st.mine || c.sentRound === st.round) {
+        const w = el('div', 'kp-wait');
+        w.append(el('div', 'kp-big', '✓ Abgegeben'), el('div', 'muted kp-wait-n', `${st.submitted || 0} von ${st.rounds} fertig`), el('div', 'muted', 'Warte auf die anderen …'));
+        body.appendChild(w);
+        return;
+      }
+      if (!c.task || c.task.round !== st.round) { body.appendChild(el('div', 'kp-msg', 'Aufgabe wird geladen …')); return; }
+      renderTask(c, st);
+    }
+
+    function renderLobby(c, st) {
+      const box = el('div', 'kp-lobby');
+      box.appendChild(el('div', 'kp-how', 'Jeder schreibt einen Satz. Dann wird reihum gezeichnet und beschrieben, bis jeder an jeder Kette einmal dran war. Niemand weiss, von wem etwas kommt – am Schluss seht ihr alles.'));
+      const ul = el('ul', 'kp-players');
+      (st.players || []).forEach((code) => {
+        const ct = contacts[code] || {};
+        const li = el('li');
+        li.append(avatarEl(nameOf(code), code === me.code ? me.avatar : ct.avatar, code, 'sm', null, code === me.code ? me.frame : ct.frame), el('span', '', playerName(code) + (code === st.creator ? ' · startet' : '')));
+        ul.appendChild(li);
+      });
+      box.appendChild(el('div', 'label', `Dabei (${(st.players || []).length})`));
+      box.appendChild(ul);
+      const inIt = (st.players || []).includes(me.code), host = st.creator === me.code;
+      const acts = el('div', 'kp-acts');
+      if (!host) {
+        const b = el('button', inIt ? 'ghost' : 'primary', inIt ? 'Doch nicht mitspielen' : '🙋 Mitspielen');
+        b.onclick = () => send({ t: inIt ? 'leave' : 'join' });
+        acts.appendChild(b);
+        if (inIt) box.appendChild(el('div', 'muted', `Warte, bis ${nameOf(st.creator)} das Spiel startet …`));
+      } else {
+        const n = (st.players || []).length;
+        const startB = el('button', 'primary', n >= 2 ? `▶ Starten (${n} Spieler)` : 'Warte auf Mitspieler …');
+        startB.disabled = n < 2;
+        startB.onclick = () => send({ t: 'start' });
+        const cancelB = el('button', 'ghost', 'Abbrechen');
+        cancelB.onclick = () => { if (confirm('Spiel wirklich abbrechen?')) send({ t: 'cancel' }); };
+        acts.append(cancelB, startB);
+        if (n < 3) box.appendChild(el('div', 'muted', 'Ab 3 Leuten macht es am meisten Spass.'));
+      }
+      box.appendChild(acts);
+      body.appendChild(box);
+    }
+
+    function renderTask(c, st) {
+      const box = el('div', 'kp-task');
+      const p = c.plain;
+      const draft = store.load('kpDraft', null);
+      const myDraft = draft && draft.room === c.room && draft.round === st.round ? draft : null;
+      if (st.kind === 'draw') {
+        box.appendChild(el('div', 'kp-ask', 'Zeichne:'));
+        box.appendChild(el('div', 'kp-prompt', p && p.text ? p.text : 'Du hast keinen Satz bekommen – zeichne, was dir einfällt!'));
+        const pad = window.WHATSUP_DRAWPAD.create();
+        c.pad = pad; c.padRound = st.round;
+        if (myDraft && myDraft.img) pad.load(myDraft.img);
+        let saveT = null;
+        pad.el.addEventListener('pointerup', () => { clearTimeout(saveT); saveT = setTimeout(saveDraft, 1200); });
+        box.appendChild(pad.el);
+      } else {
+        if (st.kind === 'describe') {
+          box.appendChild(el('div', 'kp-ask', 'Was ist auf diesem Bild?'));
+          if (p && p.img) { const img = el('img', 'kp-img'); img.src = p.img; img.alt = 'Zeichnung'; box.appendChild(img); }
+          else box.appendChild(el('div', 'kp-prompt', 'Du hast kein Bild bekommen – schreib einen Satz, den der Nächste zeichnen soll.'));
+        } else box.appendChild(el('div', 'kp-ask', 'Schreib einen Satz, den jemand zeichnen soll.'));
+        const input = el('textarea', 'kp-input');
+        input.maxLength = MAX_TEXT;
+        input.rows = 2;
+        input.placeholder = st.kind === 'describe' ? 'Ich sehe …' : 'z. B. Eine Katze fährt Skateboard auf dem Mond';
+        if (myDraft && myDraft.text) input.value = myDraft.text;
+        input.oninput = () => { store.save('kpDraft', { room: c.room, round: st.round, text: input.value }); };
+        input.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } };
+        c.input = input;
+        box.appendChild(input);
+        setTimeout(() => { if (c.input === input && !isMobileUA()) input.focus(); }, 50);
+      }
+      const done = el('button', 'primary kp-done', 'Fertig ✓');
+      done.onclick = () => submit();
+      box.appendChild(done);
+      body.appendChild(box);
+    }
+    const isMobileUA = () => window.matchMedia('(pointer: coarse)').matches;
+
+    // Ergebnis: jede Kette wie ein Chatverlauf – Satz (mit Name), Bild, Satz, …
+    function renderResults(c) {
+      const res = c.results, n = res.n;
+      if (!n) { body.appendChild(el('div', 'kp-msg', 'Keine Ergebnisse.')); return; }
+      const idx = Math.max(0, Math.min(n - 1, c.chainIdx || 0));
+      const chain = res.chains[idx];
+      const nav = el('div', 'kp-nav');
+      const prev = el('button', 'ghost', '‹'); prev.disabled = idx === 0;
+      const next = el('button', 'ghost', '›'); next.disabled = idx === n - 1;
+      prev.onclick = () => { c.chainIdx = idx - 1; render(); };
+      next.onclick = () => { c.chainIdx = idx + 1; render(); };
+      const starter = chain[0] && chain[0].by;
+      nav.append(prev, el('div', 'kp-nav-t', `Kette ${idx + 1} von ${n}${starter ? ' · von ' + (starter === me.code ? 'dir' : nameOf(starter)) : ''}`), next);
+      body.appendChild(nav);
+      const list = el('div', 'kp-res');
+      chain.forEach((x) => {
+        const mine = x.by === me.code;
+        const row = el('div', 'kp-row' + (mine ? ' me' : ''));
+        row.appendChild(el('div', 'kp-who', x.by ? playerName(x.by) : 'Unbekannt'));
+        const bub = el('div', 'kp-bub' + (x.img ? ' pic' : ''));
+        if (x.img) { const img = el('img'); img.src = x.img; img.alt = 'Zeichnung'; img.loading = 'lazy'; bub.appendChild(img); }
+        else if (x.text) bub.textContent = x.text;
+        else { bub.classList.add('missing'); bub.textContent = x.k === 'img' ? '(nicht gezeichnet)' : '(nichts geschrieben)'; }
+        row.appendChild(bub);
+        list.appendChild(row);
+      });
+      body.appendChild(list);
+      if (idx < n - 1) { const b = el('button', 'primary kp-done', 'Nächste Kette ›'); b.onclick = () => { c.chainIdx = idx + 1; render(); body.scrollTop = 0; }; body.appendChild(b); }
+    }
+
+    // ---------- Karte im Gruppenchat ----------
+    function card(chatId, m, box) {
+      box.appendChild(el('div', 'game-sub', 'Schreiben, zeichnen, raten – reihum. Niemand weiss, von wem was kommt.'));
+      const active = cur && cur.room === m.game.r;
+      let label = '▶ Zum Spiel';
+      if ((active && cur.results) || store.load('kpDone', []).includes(m.game.r)) label = '🖼️ Ergebnisse ansehen';
+      else if (active && cur.st) label = cur.st.phase === 'lobby' ? '▶ Zur Lobby' : cur.st.phase === 'play' ? '▶ Weiterspielen' : '▶ Öffnen';
+      else if (m.from === me.code) label = '▶ Lobby öffnen';
+      const b = el('button', 'game-again quiz-play', label);
+      b.type = 'button';
+      b.onclick = (e) => { e.stopPropagation(); open(chatId, m); };
+      box.appendChild(b);
+    }
+
+    // Nach dem Neuladen: laufendes Spiel im Hintergrund wieder aufnehmen
+    function resume() {
+      const a = store.load('kpActive', null);
+      if (!a || !a.room || cur) return;
+      const m = (chats[a.chatId] || []).find((x) => x.id === a.msgId && x.game && x.game.r === a.room);
+      if (m) open(a.chatId, m, 'mini');
+      else store.save('kpActive', null);
+    }
+
+    return { create, card, open, resume, active: () => !!cur };
   })();
 
   // ================= Wochenrückblick =================
@@ -9849,6 +10331,7 @@
     setInterval(() => scheduled.tick(), 15 * 1000);
     recap.check(); renderList();
     setInterval(() => { recap.check(); if (view === 'viewList') renderList(); }, 60 * 60 * 1000);
+    kritzel.resume(); // laufendes Kritzelpost-Spiel nach dem Neuladen weiterspielen
     qr.fromUrl();
   }
 

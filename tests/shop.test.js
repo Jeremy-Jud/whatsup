@@ -33,11 +33,11 @@ test('Punkte-Shop: jeder Artikel existiert in der App und hat einen Preis', () =
   }
 });
 
-test('Punkte-Shop: Challenge- und Event-Belohnungen kann man nicht kaufen', () => {
+test('Punkte-Shop: Pro-Sachen, Challenge- und Event-Belohnungen kann man nicht kaufen', () => {
   const shop = shopList(), { FRAMES, BANNERS } = frames();
   for (const id of Object.keys(shop)) {
     const [kind, key] = id.split(':');
     const item = kind === 'frame' ? FRAMES[key] : kind === 'banner' ? BANNERS[key] : {};
-    assert.ok(!item.challenge && !item.event, id);
+    assert.ok(kind !== 'design' && !item.pro && !item.challenge && !item.event, id);
   }
 });

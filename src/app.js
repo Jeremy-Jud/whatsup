@@ -5449,11 +5449,12 @@
       const locked = frameLocked(id), proOnly = !!(id && FRAMES[id].pro), eventOnly = !!(id && FRAMES[id].event);
       const b = el('button', 'frame-opt' + (id === draftFrame ? ' active' : '') + (id && FRAMES[id].locked ? ' exclusive' : '') + (locked ? ' locked' : '') + (proOnly ? ' pro-only' : '') + (eventOnly ? ' event-only' : ''));
       b.type = 'button';
-      b.title = id ? FRAMES[id].name + (locked ? (eventOnly ? ' – nur aus dem Weihnachts-Event' : FRAMES[id].challenge ? ` – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges` : ' – im Punkte-Shop oder mit WhatsUp Pro') : '') : 'Kein Rahmen';
+      b.title = id ? FRAMES[id].name + (locked ? (eventOnly ? ' – nur aus dem Weihnachts-Event' : proOnly ? ' – mit WhatsUp Pro' : FRAMES[id].challenge ? ` – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges` : ' – im Punkte-Shop oder mit WhatsUp Pro') : '') : 'Kein Rahmen';
       b.appendChild(avatarEl(name, draftAvatar, me.code, 'md', null, id));
       b.appendChild(el('span', 'frame-name', id ? FRAMES[id].name : 'Keiner'));
       b.onclick = () => {
         if (locked && eventOnly) { toast('🎄 Exklusiv aus dem Weihnachts-Event, gibt es nie wieder'); return; }
+        if (locked && proOnly) { pro.open(); return; }
         if (locked && !FRAMES[id].challenge) { shop.open('frame:' + id); return; } // Punkte-Shop (oder Pro)
         if (locked) { toast(`🔒 Challenge-Belohnung – ab ${FRAMES[id].challenge} geschafften Wochen-Challenges`); return; }
         draftFrame = id; renderProfAvatar(); markProfileDirty(profileDirty());
@@ -5468,8 +5469,9 @@
       const b = el('button', 'banner-opt' + (id ? '' : ' none') + (id === draftBanner ? ' active' : '') + (locked ? ' locked' : '') + (proOnly ? ' pro-only' : '') + (id && BANNERS[id].anim ? ' anim' : ''), id ? BANNERS[id].name : 'Kein Banner');
       b.type = 'button';
       if (id) b.style.background = BANNERS[id].bg;
-      b.title = locked ? (BANNERS[id].challenge ? `Ab ${BANNERS[id].challenge} geschafften Wochen-Challenges` : 'Im Punkte-Shop oder mit WhatsUp Pro') : '';
+      b.title = locked ? (proOnly ? 'Mit WhatsUp Pro' : BANNERS[id].challenge ? `Ab ${BANNERS[id].challenge} geschafften Wochen-Challenges` : 'Im Punkte-Shop oder mit WhatsUp Pro') : '';
       b.onclick = () => {
+        if (locked && proOnly) { pro.open(); return; }
         if (locked && !BANNERS[id].challenge) { shop.open('banner:' + id); return; } // Punkte-Shop (oder Pro)
         if (locked) { toast(`🔒 Challenge-Belohnung – ab ${BANNERS[id].challenge} geschafften Wochen-Challenges`); return; }
         draftBanner = id; renderProfAvatar(); markProfileDirty(profileDirty());
@@ -5548,12 +5550,12 @@
   for (const [id, name, tag] of DESIGNS) {
     const b = el('button', 'design-opt' + (tag === 'pro' ? ' pro-only' : ''));
     b.dataset.design = id;
-    b.title = name + (tag === 'pro' ? ' – im Punkte-Shop oder mit WhatsUp Pro' : '');
+    b.title = name + (tag === 'pro' ? ' – mit WhatsUp Pro' : '');
     b.append(el('span', 'dz-scene'), el('span', 'dz-b1'), el('span', 'dz-b2'), el('span', 'dz-name', name), el('span', 'dz-check', '✓'));
     if (tag === 'pro') b.append(el('span', 'dz-pro', '⭐ Pro'));
     if (window.ThemeFx) window.ThemeFx.preview(b, id);   // Mini-Szene (nur Designs mit bewegtem Hintergrund)
     b.onclick = () => {
-      if (tag === 'pro' && !pro.hasDesign(id)) { shop.open('design:' + id); return; } // Punkte-Shop (oder Pro)
+      if (tag === 'pro' && !pro.hasDesign(id)) { pro.open(); return; }
       settings.design = id; saveSettings(); applyTheme(); renderTheme(); sendPrefs();
     };
     $('designGrid').append(b);
@@ -7339,7 +7341,7 @@
       sb.type = 'button';
       const bal = shop.balance();
       const st = el('span', 'chall-shop-t');
-      st.append(el('b', '', '🛒 Punkte-Shop'), el('span', 'muted', bal == null ? 'Rahmen, Banner und Designs für deine Punkte' : `Du hast ${fmtN(bal)} ${bal === 1 ? 'Punkt' : 'Punkte'} zum Ausgeben`));
+      st.append(el('b', '', '🛒 Punkte-Shop'), el('span', 'muted', bal == null ? 'Rahmen und Banner für deine Punkte' : `Du hast ${fmtN(bal)} ${bal === 1 ? 'Punkt' : 'Punkte'} zum Ausgeben`));
       sb.append(st, el('span', 'pers-arrow', '›'));
       sb.onclick = () => shop.open();
       head.appendChild(sb);
@@ -7398,7 +7400,7 @@
   })();
 
   // ================= Punkte-Shop =================
-  // Challenge-Punkte gegen Rahmen, Banner und Pro-Designs tauschen. Preise, Kontostand und Käufe liegen auf dem
+  // Challenge-Punkte gegen Rahmen und Banner tauschen (Pro-Sachen gibt es nur mit Pro). Preise, Kontostand und Käufe liegen auf dem
   // Server (relay: SHOP, shop_buys), die App merkt sich die gekauften Sachen nur für offline (shopOwned).
   const shop = (() => {
     const api = (p) => relay.url() + p;
@@ -7462,7 +7464,7 @@
           if (!box.isConnected || !box.classList.contains('shop-box')) return;
           const bal = el('div', 'shop-bal', data ? `🏅 ${fmtN(data.balance)} ${data.balance === 1 ? 'Punkt' : 'Punkte'}` : '🏅 …');
           head.replaceChildren(el('h3', '', '🛒 Punkte-Shop'), bal,
-            el('div', 'muted', 'Punkte gibt es für Wochen-Challenges (🏆 Erfolge → Challenges). Tausche sie gegen Rahmen, Banner und Designs.'));
+            el('div', 'muted', 'Punkte gibt es für Wochen-Challenges (🏆 Erfolge → Challenges). Tausche sie gegen Rahmen und Banner.'));
           body.replaceChildren();
           if (!data) {
             body.append(el('div', 'muted center', !relay.ready() ? 'Für den Shop muss in den Einstellungen „Über den Server zustellen“ an sein.' : failed ? '⚠️ Der Shop ist gerade nicht erreichbar.' : 'Wird geladen …'),
@@ -7495,7 +7497,6 @@
                 busy = null; draw();
               };
               card.append(pv, el('div', 'shop-name', x.i.name), btn);
-              if (x.i.pro && !bought && !had) card.appendChild(el('div', 'shop-tag', '⭐ auch mit Pro'));
               grid.appendChild(card);
             });
             body.appendChild(grid);

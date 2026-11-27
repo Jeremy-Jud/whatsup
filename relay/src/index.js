@@ -553,13 +553,10 @@ const CHALL_POOL = [
 ];
 const CHALL_TYPES = ['reel_sound', 'reel_post', 'reel_likes', 'comments', 'messages', 'fire'];
 // Punkte-Shop: was man mit Challenge-Punkten kaufen kann und was es kostet (eine Woche bringt etwa 60–85 Punkte).
-// Nicht im Shop: Challenge-Belohnungen (erspielt man) und Event-Belohnungen (gibt es nie wieder).
+// Nicht im Shop: Pro-Sachen (gibt es nur mit WhatsUp Pro), Challenge-Belohnungen (erspielt man) und Event-Belohnungen.
 const SHOP = {
   'banner:sunset': 40, 'banner:ocean': 40, 'banner:neon': 40, 'banner:gold': 40, 'banner:galaxy': 40,
   'frame:flames': 60, 'frame:galaxy': 60, 'frame:laurel': 60, 'frame:rainbow': 60, 'frame:diamond': 60,
-  'banner:aurora': 90, 'banner:lava': 90, 'banner:holo': 90,
-  'frame:orbit': 120, 'frame:blaze': 120, 'frame:aurora': 120, 'frame:bolt': 120,
-  'design:aurora': 150, 'design:coderain': 150, 'design:volcano': 150,
 };
 // Woche beginnt Montag 00:00 UTC
 const weekStart = (t = Date.now()) => { const d = new Date(t); const day = (d.getUTCDay() + 6) % 7; return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - day); };
